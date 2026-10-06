@@ -10,6 +10,8 @@ import bisect
 import json
 import math
 import struct
+import functools
+from fractions import Fraction
 from pathlib import Path
 from PIL import Image
 
@@ -76,7 +78,33 @@ def verify(composite_path, raw_path, metadata_path):
             assert actual_value is None, f'{key}: invalid radiance was exported as a value'
         else:
             assert actual_value is not None and abs(reference - actual_value) < .001, f'{key}: {reference} vs {actual_value}'
+    @functools.lru_cache(maxsize=65536)
+    def temperature(word):
+        return corrected(word, metadata)
+    for item in metadata.get('measurements', []):
+        x0, y0 = item['sensor_start']; x1, y1 = item['sensor_end']
+        if item['kind'] == 'spot':
+            indices = [y0 * 256 + x0]
+        elif item['kind'] == 'box':
+            indices = [y * 256 + x for y in range(min(y0, y1), max(y0, y1) + 1) for x in range(min(x0, x1), max(x0, x1) + 1)]
+        else:
+            steps = max(abs(x1 - x0), abs(y1 - y0))
+            indices = [y0 * 256 + x0] if steps == 0 else [
+                math.floor(Fraction(y0) + Fraction((y1 - y0) * i, steps) + Fraction(1, 2)) * 256 +
+                math.floor(Fraction(x0) + Fraction((x1 - x0) * i, steps) + Fraction(1, 2)) for i in range(steps + 1)]
+            assert indices == item['profile_sensor_indices'], 'Line path differs from nearest-pixel definition'
+        values = [temperature(expected[i]) for i in indices]
+        finite = [value for value in values if value is not None]
+        assert item['valid_samples'] == len(finite) and item['invalid_samples'] == len(values) - len(finite)
+        for key, reference in [('minimum_celsius', min(finite) if finite else None), ('maximum_celsius', max(finite) if finite else None), ('average_celsius', sum(finite) / len(finite) if finite else None)]:
+            assert (reference is None and item[key] is None) or (reference is not None and item[key] is not None and abs(reference - item[key]) < .001), (item['id'], key)
+        if item['kind'] == 'line':
+            assert len(values) == len(item['profile_celsius'])
+            for reference, value in zip(values, item['profile_celsius']):
+                assert (reference is None and value is None) or (reference is not None and value is not None and abs(reference - value) < .001)
     print('All 49,152 raw words preserved; min/max/center match independent band-radiance calculation within 0.001 °C.')
+    if metadata.get('measurements'):
+        print('All sensor-region statistics, validity counts and line profiles match the independent calculation within 0.001 °C.')
 
 
 if __name__ == '__main__':

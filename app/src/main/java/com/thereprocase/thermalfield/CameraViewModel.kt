@@ -40,6 +40,8 @@ data class FrameTelemetry(
     val swapMs: Double = 0.0, val presentationMs: Double = 0.0,
     val presentationSamples: Long = 0, val error: String = "",
     val emissivity: Double = Double.NaN, val reflectedCelsius: Double = Double.NaN, val corrected: Boolean = false,
+    val measurements: List<Measurement> = emptyList(), val delta: Double = Double.NaN,
+    val isothermPixels: Int = 0, val measurementVersion: Long = 0,
 )
 
 data class CameraUiState(
@@ -55,6 +57,11 @@ data class CameraUiState(
     val editing: Boolean = false,
     val emissivity: Double = 1.0, val reflectedCelsius: Double = 20.0, val corrected: Boolean = false,
     val correctionApplying: Boolean = false, val correctionError: String = "",
+    val measurementTool: Int = 0, val selectedMeasurement: Int = 0,
+    val deltaFirst: Int = 0, val deltaSecond: Int = 0,
+    val isothermMode: Int = 0, val isothermLower: Float = 20f, val isothermUpper: Float = 30f,
+    val measurementApplying: Boolean = false, val expectedMeasurementVersion: Long = 0,
+    val fullScreen: Boolean = false,
 )
 
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
@@ -66,6 +73,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val captureWorker = Executors.newSingleThreadExecutor { task -> Thread(task, "ThermalCaptureIO") }
     private val correctionWorker = Executors.newSingleThreadExecutor { task -> Thread(task, "ThermalCorrection") }
     private val correctionGeneration = AtomicLong(0)
+    private val measurementGeneration = AtomicLong(0)
     private val generation = AtomicLong(0)
     private val preferences = context.getSharedPreferences("display", Context.MODE_PRIVATE)
     private val permissionAction = "${context.packageName}.USB_PERMISSION"
@@ -73,6 +81,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var activeDevice: String? = null
     @Volatile private var started = false
     @Volatile private var surfaceReady = false
+    private var renderSurface: Surface? = null
     @Volatile private var closed = false
     private var fixtureSelected = false
     private var networkSelected = false
@@ -134,6 +143,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         presentationMs = json.getDouble("presentation_latency_ms"),
                         presentationSamples = json.getLong("presentation_samples"), error = json.getString("error"),
                         emissivity = json.optDouble("emissivity", Double.NaN), reflectedCelsius = json.optDouble("reflected_apparent_celsius", Double.NaN), corrected = json.optBoolean("correction_applied"),
+                        measurements = measurements(json), delta = json.optJSONObject("delta_t")?.optDouble("celsius", Double.NaN) ?: Double.NaN,
+                        isothermPixels = json.optJSONObject("isotherm")?.optInt("matched_pixels") ?: 0,
+                        measurementVersion = json.optLong("measurement_version"),
                     )
                     mutableState.update { it.copy(frame = frame) }
                 } catch (error: Exception) { Log.e("ThermalField", "Telemetry read failed", error) }
@@ -149,12 +161,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun surface(surface: Surface?) {
         if (closed) return
+        renderSurface = surface
         bridge.surface(engine, surface)
         surfaceReady = surface != null
         if (surfaceReady && started && !state.value.connected) {
             when { networkSelected && !state.value.network -> network(state.value.networkUrl); fixtureSelected && !state.value.fixture -> fixture(); else -> connect() }
         }
     }
+    fun removeSurface(surface: Surface) {
+        // A removed portrait view can report destruction after its landscape
+        // replacement is attached. Only its own surface may clear the engine.
+        if (renderSurface === surface) this.surface(null)
+    }
+    fun updateSurface(surface: Surface) { if (renderSurface === surface) this.surface(surface) }
 
     fun connect() {
         if (!started || !surfaceReady || networkSelected || state.value.fixture || state.value.connected || state.value.busy || requestedDevice != null) return
@@ -318,6 +337,45 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
     fun editing(value: Boolean) { mutableState.update { it.copy(editing = value) } }
+    fun measurementTool(kind: Int, id: Int = 0) { mutableState.update { it.copy(measurementTool = kind, selectedMeasurement = id) } }
+    fun fullScreen(value: Boolean) { mutableState.update { it.copy(fullScreen = value) } }
+    private fun measurementChange(operation: () -> Unit) {
+        val token = measurementGeneration.incrementAndGet()
+        mutableState.update { it.copy(measurementApplying = true) }
+        correctionWorker.execute {
+            if (closed) return@execute
+            try { operation() } catch (error: Exception) { message(error.message ?: "Measurement change failed") }
+            if (!closed && token == measurementGeneration.get()) {
+                val version = bridge.measurementVersion(engine)
+                mutableState.update { it.copy(measurementApplying = false, expectedMeasurementVersion = version) }
+            }
+        }
+    }
+    fun placeMeasurement(x0: Double, y0: Double, x1: Double, y1: Double) {
+        val kind = state.value.measurementTool; val id = state.value.selectedMeasurement
+        if (kind !in 1..3 || state.value.frame.frame == 0L) return
+        measurementChange {
+            try {
+                bridge.geometry(engine, id, kind, x0, y0, x1, y1)
+                mutableState.update { it.copy(selectedMeasurement = 0, captureMessage = "Measurement placed · sensor coordinates") }
+            } catch (error: Exception) { message(error.message ?: "Measurement could not be placed") }
+        }
+    }
+    fun deleteMeasurement(id: Int) {
+        measurementChange {
+            try { bridge.eraseGeometry(engine, id) } catch (error: Exception) { message(error.message ?: "Measurement could not be removed") }
+        }
+        mutableState.update { it.copy(selectedMeasurement = 0, deltaFirst = if (id == 0 || it.deltaFirst == id) 0 else it.deltaFirst, deltaSecond = if (id == 0 || it.deltaSecond == id) 0 else it.deltaSecond) }
+    }
+    fun measurementOptions(first: Int = state.value.deltaFirst, second: Int = state.value.deltaSecond, mode: Int = state.value.isothermMode, lower: Float = state.value.isothermLower, upper: Float = state.value.isothermUpper) {
+        if (mode !in 0..3 || !lower.isFinite() || !upper.isFinite() || upper < lower) return
+        measurementChange {
+            try {
+                bridge.measurementOptions(engine, first, second, mode, lower, upper)
+                mutableState.update { it.copy(deltaFirst = first, deltaSecond = second, isothermMode = mode, isothermLower = lower, isothermUpper = upper) }
+            } catch (error: Exception) { message(error.message ?: "Measurement settings could not be applied") }
+        }
+    }
     fun message(value: String) { mutableState.update { it.copy(captureMessage = value) } }
     private fun configure() { state.value.let { bridge.configure(engine, it.palette, it.flip, it.rotation, it.mirror, it.automatic, it.lower, it.upper) } }
 
@@ -346,6 +404,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             !it.connected && !it.fixture -> "Source disconnected"
             it.frame.error.isNotEmpty() -> "Display error"
             it.busy -> "Camera command in progress"
+            it.measurementApplying || it.frame.measurementVersion < it.expectedMeasurementVersion -> "Measurements are applying"
             it.correctionApplying || it.frame.corrected != it.corrected || kotlin.math.abs(it.frame.emissivity - it.emissivity) > 1e-7 || kotlin.math.abs(it.frame.reflectedCelsius - it.reflectedCelsius) > 1e-5 -> "Correction inputs are applying"
             it.saving -> "Capture is already saving"
             it.editing -> "Finish editing first"

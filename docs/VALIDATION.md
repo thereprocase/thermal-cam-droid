@@ -26,6 +26,17 @@ Observed results are scoped to the stated run. An absence of errors during one r
 
 Remaining M3 checks: partly invalid live/demo frames, further input-domain edges, final-build sustained measurements, and physical camera-baseline/official-app qualification. No bath delta is claimed.
 
+## 2026-10-06: M2 integration, qualification in progress
+
+- Added an independent C++17 sensor-coordinate measurement module. Analytical tests cover inclusive/reversed boxes, a known linear temperature field, ordered point differences, nearest-pixel profiles and reversal, degenerate lines, inclusive band/below/above thresholds, invalid-sample exclusion, partly invalid corrected scenes and bounded geometry. All four native suites passed; Android build and export unit tests passed.
+- Installed the measurement UI and GPU contours on Pixel. The first synthetic gesture run placed two spots, one box and one line at 90° rotation. The saved sidecar contained original sensor geometry and derived readings; the raw PNG retained every original word.
+- Independent finer Planck quadrature/bisection verified all readings and every line-profile sample within **0.001 °C**. The tested box contained **25,392 samples**, with min/max/mean **9.0109415 / 34.7155190 / 20.4576151 °C**. The tested line contained **145 samples**, mean **20.5786631 °C**. These are synthetic numerical checks, not physical surface measurements.
+- The first gesture test showed drag origins shifted after touch slop. The handler was changed to retain the actual finger-down position. The updated build compiled and was installed, but its final UI retest reached the lock screen: Android reported keyguard showing and Dozing, and the app UI was unavailable to automation. This is a verification gap, not evidence that the new handler failed. Hardware tests resume when the phone is unlocked.
+- The portrait viewport and contours were inspected while the controls occupied a separate scroll area. Landscape, final gesture-origin accuracy, ΔT/isotherm interactions, all transforms, editing/deletion and sustained live performance with measurement load remain to be qualified.
+- Captures retain an immutable geometry/correction version. Saving waits until displayed-frame telemetry matches a newly requested measurement version. Performance logs omit profile arrays so a large profile cannot truncate the JSON log at Android's message limit.
+
+The M2 implementation is present; its full acceptance gate remains open. Physical USB detach/reattach, official-app bath comparisons and release qualification remain separate requirements.
+
 ## Acceptance gates still open
 
 - Official-app comparison at ε = 0.96: ice-water and approximately 55 °C water; record per-point deltas. No bath delta is currently claimed.
@@ -34,3 +45,9 @@ Remaining M3 checks: partly invalid live/demo frames, further input-domain edges
 - Repeated physical detach/reattach on the final application build, permission-denial recovery and landscape usability.
 - Remote command recovery, per-frame network gain/command provenance, and long network runs under congestion. TCP delivery does not guarantee all source frames are displayed; sequence counters are the evidence.
 - Full release signing, dependency redistribution audit and public APK/site delivery.
+
+M2 follow-up after unlock: finger-down placement was retested. The box recorded sensor corners (25,172)–(217,28), **27,985** inclusive samples, mean **20.5145919 °C**. The line recorded (51,153)–(204,38), **154** samples. Independent statistics/profile verification and every-word raw preservation passed. Selecting P2 as ΔT A and P1 as B yielded **25.5102109909 °C**. A 20–30 °C band matched **35,718** pixels, independently counted across the complete original plane. Mirroring retained every sensor coordinate, reading and profile while reflecting display x coordinates.
+
+The first forced landscape transition produced **EGL Surface creation failed** and exposed cramped vertical layout. Surface-owner checks, native buffer-format selection, bounded renderer retries and a compact layout were added; these compile and pass the existing suites. Their final device retest was interrupted by a wireless ADB disconnect. The known endpoint failed a three-second TCP reachability check both from the sandbox and host. This does not establish a permanent device or app failure. Rotation settings were restored to their original portrait value before connection loss.
+
+Wireless ADB was subsequently recovered through the already configured Tailscale route. The updated build was installed. Full-screen entry, volume-key capture and Back-to-exit were checked on Pixel, followed by another forced landscape transition. The thermal image, numeric scale and controls rendered successfully in that run. The recorded synthetic stream sample was **2,395 received/rendered**, **25.00 fps**, **zero malformed frames, source gaps and overflow**, and an empty renderer-error field. Peak callback-to-swap reached **107.61 ms** during view transitions; the sampled callback-to-presentation was **21.99 ms**. This demonstrates recovery for that tested transition and app queue accounting; it does not prove that every compositor presentation occurred or that all future transitions are safe. Original portrait rotation settings were restored afterward.

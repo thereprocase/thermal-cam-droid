@@ -37,6 +37,7 @@ internal object CaptureStore {
         val id = "ThermalField_${Instant.ofEpochSecond(timestamp / 1_000_000_000, timestamp % 1_000_000_000).toString().replace(":", "-")}"
         metadata.put("app_version", BuildConfig.VERSION_NAME)
         metadata.put("display_unit", if (fahrenheit) "F" else "C")
+        metadata.put("preferred_share", if (rawPreferred) "radiometric_plane" else "annotated_image")
         metadata.put("raw_width", 256).put("raw_height", 192).put("raw_sensor_orientation", true)
         metadata.put("raw_scaling", "Kelvin × 64; Celsius = word / 64 - 273.15")
         metadata.put("rendered_file", "$id.png").put("raw_file", "${id}_raw.png").put("sidecar_file", "$id.json")
@@ -87,7 +88,12 @@ internal object CaptureStore {
         }
         val source = Bitmap.createBitmap(colors, width, height, Bitmap.Config.ARGB_8888)
         val scale = 4
-        val bitmap = Bitmap.createBitmap(width * scale, height * scale + 264, Bitmap.Config.ARGB_8888)
+        val measurements = metadata.optJSONArray("measurements")
+        val delta = metadata.optJSONObject("delta_t"); val isotherm = metadata.optJSONObject("isotherm")
+        val showDelta = delta != null && delta.optInt("first") != 0 && delta.optInt("second") != 0
+        val showIsotherm = isotherm?.optBoolean("enabled") == true
+        val extraRows = (measurements?.length() ?: 0) + (if (showDelta) 1 else 0) + (if (showIsotherm) 1 else 0)
+        val bitmap = Bitmap.createBitmap(width * scale, height * scale + 264 + extraRows * 30, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.drawColor(Color.WHITE)
         canvas.drawBitmap(source, null, android.graphics.Rect(0, 0, width * scale, height * scale), Paint())
@@ -97,15 +103,30 @@ internal object CaptureStore {
         }
         fun temperature(value: Double): String = if (!value.isFinite()) "—" else String.format(Locale.US, "%.1f °%s",
             if (fahrenheit) value * 9 / 5 + 32 else value, if (fahrenheit) "F" else "C")
+        val occupied = mutableListOf<android.graphics.RectF>()
+        fun drawLabel(text: String, point: org.json.JSONArray) {
+            val textWidth = paint.measureText(text)
+            val x = (point.getDouble(0).toFloat() * width * scale + 12).coerceIn(8f, bitmap.width - textWidth - 8)
+            val origin = point.getDouble(1).toFloat() * height * scale - 12
+            var y = origin.coerceIn(28f, height * scale - 12f)
+            for (attempt in 0..48) {
+                val offset = ((attempt + 1) / 2) * 32 * (if (attempt % 2 == 0) 1 else -1)
+                val candidate = (origin + offset).coerceIn(28f, height * scale - 12f)
+                val rectangle = android.graphics.RectF(x - 5, candidate - 24, x + textWidth + 5, candidate + 6)
+                if (occupied.none { android.graphics.RectF.intersects(it, rectangle) }) { y = candidate; break }
+            }
+            val rectangle = android.graphics.RectF(x - 5, y - 24, x + textWidth + 5, y + 6)
+            occupied += rectangle; paint.color = Color.argb(205, 0, 0, 0); canvas.drawRect(rectangle, paint)
+            paint.color = Color.WHITE; canvas.drawText(text, x, y, paint)
+        }
         for ((label, position, key) in listOf(Triple("MIN", "min_display", "minimum_celsius"),
             Triple("MAX", "max_display", "maximum_celsius"), Triple("C", "center_display", "center_celsius"))) {
-            val point = metadata.getJSONArray(position)
-            val text = "$label ${temperature(metadata.optDouble(key, Double.NaN))}"
-            val x = (point.getDouble(0).toFloat() * width * scale + 12).coerceIn(8f, bitmap.width - paint.measureText(text) - 8)
-            val y = (point.getDouble(1).toFloat() * height * scale - 12).coerceIn(28f, height * scale - 12f)
-            paint.color = Color.argb(205, 0, 0, 0)
-            canvas.drawRect(x - 5, y - 24, x + paint.measureText(text) + 5, y + 6, paint)
-            paint.color = Color.WHITE; canvas.drawText(text, x, y, paint)
+            drawLabel("$label ${temperature(metadata.optDouble(key, Double.NaN))}", metadata.getJSONArray(position))
+        }
+        fun measurementName(item: JSONObject) = "${when (item.getString("kind")) { "spot" -> "P"; "box" -> "B"; else -> "L" }}${item.getInt("id")}"
+        for (index in 0 until (measurements?.length() ?: 0)) {
+            val item = measurements!!.getJSONObject(index)
+            drawLabel("${measurementName(item)} ${temperature(item.optDouble("average_celsius", Double.NaN))}", item.getJSONArray("display_start"))
         }
         paint.color = Color.rgb(16, 16, 16)
         val row = height * scale + 34f
@@ -134,6 +155,20 @@ internal object CaptureStore {
         }
         val time = Instant.ofEpochSecond(metadata.getLong("timestamp_unix_ns") / 1_000_000_000).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss XXX"))
         canvas.drawText(time, 16f, row + 221, paint)
+        paint.textSize = 18f
+        var extraRow = height * scale + 284f
+        for (index in 0 until (measurements?.length() ?: 0)) {
+            val item = measurements!!.getJSONObject(index)
+            val text = if (item.getString("kind") == "spot") "${measurementName(item)} ${temperature(item.optDouble("average_celsius", Double.NaN))}"
+                else "${measurementName(item)} MIN ${temperature(item.optDouble("minimum_celsius", Double.NaN))} AVG ${temperature(item.optDouble("average_celsius", Double.NaN))} MAX ${temperature(item.optDouble("maximum_celsius", Double.NaN))}"
+            canvas.drawText(text, 16f, extraRow, paint); extraRow += 30
+        }
+        if (showDelta) {
+            val value = delta!!.optDouble("celsius", Double.NaN) * (if (fahrenheit) 1.8 else 1.0)
+            val text = if (value.isFinite()) String.format(Locale.US, "%.1f Δ°%s", value, if (fahrenheit) "F" else "C") else "—"
+            canvas.drawText("ΔT P${delta.getInt("first")} − P${delta.getInt("second")} $text", 16f, extraRow, paint); extraRow += 30
+        }
+        if (showIsotherm) canvas.drawText("Cyan isotherm ${isotherm!!.getString("mode")} ${temperature(isotherm.getDouble("lower_celsius"))} / ${temperature(isotherm.getDouble("upper_celsius"))} · ${isotherm.getInt("matched_pixels")} pixels", 16f, extraRow, paint)
         val output = ByteArrayOutputStream()
         check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "PNG encoding failed" }
         bitmap.recycle()

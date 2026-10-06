@@ -11,6 +11,10 @@ internal class NativeBridge {
     external fun surface(id: Long, surface: Surface?)
     external fun configure(id: Long, palette: Int, flip: Boolean, rotation: Int, mirror: Boolean, automatic: Boolean, lower: Float, upper: Float)
     external fun correction(id: Long, emissivity: Double, reflectedCelsius: Double, corrected: Boolean)
+    external fun geometry(id: Long, measurementId: Int, kind: Int, x0: Double, y0: Double, x1: Double, y1: Double): Int
+    external fun eraseGeometry(id: Long, measurementId: Int)
+    external fun measurementOptions(id: Long, first: Int, second: Int, isotherm: Int, lower: Float, upper: Float)
+    external fun measurementVersion(id: Long): Long
     external fun open(id: Long, fd: Int): String
     external fun replay(id: Long, frame: ByteArray)
     external fun beginNetwork(id: Long)

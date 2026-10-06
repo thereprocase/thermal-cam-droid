@@ -33,7 +33,7 @@ target_link_libraries(uvc PUBLIC usb PRIVATE log)
 add_library(thermal_core SHARED
     engine.cpp jni.cpp
     ${WORKBENCH}/native/p2pro_protocol.cpp ${WORKBENCH}/native/p2pro_camera.cpp
-    ${WORKBENCH}/native/radiometry.cpp)
+    ${WORKBENCH}/native/radiometry.cpp ${WORKBENCH}/native/measurements.cpp)
 target_include_directories(thermal_core PRIVATE ${WORKBENCH}/native)
 target_link_libraries(thermal_core PRIVATE uvc usb android log EGL GLESv3)
 target_link_options(thermal_core PRIVATE "-Wl,-z,max-page-size=16384")

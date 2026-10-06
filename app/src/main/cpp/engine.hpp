@@ -13,6 +13,7 @@
 #include <libuvc/libuvc.h>
 #include "p2pro_camera.hpp"
 #include "radiometry.hpp"
+#include "measurements.hpp"
 
 namespace thermal {
 constexpr std::size_t PixelCount = 256 * 192;
@@ -26,6 +27,8 @@ struct DisplaySettings {
     bool automatic = true;
     float lower = 20, upper = 30;
     std::shared_ptr<const p2pro::CorrectionTable> correction;
+    p2pro::MeasurementSettings measurements;
+    std::uint64_t measurement_version = 0;
 };
 
 struct Frame {
@@ -43,6 +46,7 @@ struct Frame {
     unsigned min_index = 0, max_index = 0;
     unsigned invalid_pixels = 0;
     DisplaySettings display;
+    p2pro::Measurements measurements;
 };
 struct CaptureRequest {
     Frame frame;
@@ -61,6 +65,10 @@ public:
     void set_surface(ANativeWindow* owned_window);
     void configure(int palette, bool flip, int rotation, bool mirror, bool automatic, float lower, float upper);
     void correction(double emissivity, double reflected_celsius, bool corrected);
+    unsigned geometry(unsigned id, int kind, double x0, double y0, double x1, double y1);
+    void erase_geometry(unsigned id);
+    void measurement_options(unsigned first, unsigned second, int isotherm, float lower, float upper);
+    std::uint64_t measurement_version();
     std::string open(int borrowed_fd);
     void replay(const std::vector<std::uint8_t>& composite);
     void begin_network();
@@ -69,7 +77,7 @@ public:
     void stop();
     void nuc();
     void gain(bool high);
-    std::string summary();
+    std::string summary(bool include_measurements = true);
     std::vector<std::uint8_t> dump_frame();
     std::vector<std::uint8_t> snapshot();
     std::vector<std::uint8_t> capture();
@@ -90,6 +98,7 @@ private:
     Frame last_presented_;
     DisplaySettings settings_;
     p2pro::BandPlanckTable planck_;
+    unsigned next_geometry_id_ = 1;
     ANativeWindow* desired_window_ = nullptr;
     std::uint64_t window_generation_ = 0;
     std::uint64_t capture_generation_ = 0;

@@ -19,7 +19,7 @@ internal class NetworkFrames(private val url: String, private val active: Atomic
         connection = current; current.connectTimeout = 4000; current.readTimeout = 12000
         current.setRequestProperty("Accept", "multipart/x-mixed-replace")
         check(current.responseCode == 200) { "Bridge returned HTTP ${current.responseCode}" }
-        check(current.getHeaderField("X-Thermal-Protocol") == "thermal-field-v1" && current.getHeaderField("X-Thermal-Format") == "yuyv-256x384-u16le-k64") { "Unsupported radiometric protocol; ordinary camera JPEGs do not contain the required temperature plane" }
+        check(current.getHeaderField("X-Thermal-Protocol") == "thermal-field-v1" && current.getHeaderField("X-Thermal-Format") == "yuyv-256x384-u16le-k64") { "Unsupported protocol; this source requires thermal-field-v1 original radiometric composites" }
         current.inputStream.use { input ->
             val stream = BufferedInputStream(input, 256 * 1024)
             while (active.get()) {

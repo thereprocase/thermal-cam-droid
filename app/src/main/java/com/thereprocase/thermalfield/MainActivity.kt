@@ -12,6 +12,7 @@ import android.view.KeyEvent
 import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -28,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.TextStyle
@@ -45,13 +47,13 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.util.Locale
 
-private val Blue = Color(0xff0000a8)
-private val Gray = Color(0xffc6c6c6)
-private val Light = Color(0xffe8e8e8)
-private val Ink = Color(0xff101010)
-private val Rule = Color(0xff666666)
-private val Sans = FontFamily(Font(R.font.plex_sans_regular), Font(R.font.plex_sans_semibold, FontWeight.SemiBold))
-private val Mono = FontFamily(Font(R.font.plex_mono_regular))
+internal val Blue = Color(0xff0000a8)
+internal val Gray = Color(0xffc6c6c6)
+internal val Light = Color(0xffe8e8e8)
+internal val Ink = Color(0xff101010)
+internal val Rule = Color(0xff666666)
+internal val Sans = FontFamily(Font(R.font.plex_sans_regular), Font(R.font.plex_sans_semibold, FontWeight.SemiBold))
+internal val Mono = FontFamily(Font(R.font.plex_mono_regular))
 
 class MainActivity : ComponentActivity() {
     private val heldCaptureKeys = mutableSetOf<Int>()
@@ -79,6 +81,14 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(state.rotationLocked) {
                 requestedOrientation = if (state.rotationLocked) ActivityInfo.SCREEN_ORIENTATION_LOCKED else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
+            LaunchedEffect(state.fullScreen) {
+                window.insetsController?.let { controller ->
+                    controller.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    if (state.fullScreen || BuildConfig.DEBUG && intent.getBooleanExtra("screenshots", false)) controller.hide(android.view.WindowInsets.Type.systemBars())
+                    else controller.show(android.view.WindowInsets.Type.systemBars())
+                }
+            }
+            BackHandler(enabled = state.fullScreen) { model.fullScreen(false) }
             ThermalScreen(state, model, ::requestCameraPermission, ::connectNetwork, ::share) {
                 if (requestedNetwork != null) { val address = requestedNetwork!!; requestedNetwork = null; connectNetwork(address) }
                 else if (requestedFixture) { requestedFixture = false; model.fixture() }
@@ -134,11 +144,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun Label(text: String, modifier: Modifier = Modifier, color: Color = Ink, mono: Boolean = false, size: Int = 14) {
+@Composable internal fun Label(text: String, modifier: Modifier = Modifier, color: Color = Ink, mono: Boolean = false, size: Int = 14) {
     BasicText(text, modifier, style = TextStyle(color = color, fontFamily = if (mono) Mono else Sans, fontSize = size.sp, lineHeight = (size * 1.4).sp))
 }
 
-@Composable private fun Action(text: String, selected: Boolean? = null, enabled: Boolean = true, modifier: Modifier = Modifier, action: () -> Unit) {
+@Composable internal fun Action(text: String, selected: Boolean? = null, enabled: Boolean = true, modifier: Modifier = Modifier, action: () -> Unit) {
     Box(modifier.defaultMinSize(minHeight = 48.dp).border(1.dp, if (enabled) Blue else Rule)
         .background(if (selected == true) Blue else Color.White).semantics { if (selected != null) stateDescription = if (selected) "Selected" else "Not selected" }
         .clickable(enabled = enabled, role = Role.Button, onClick = action).padding(horizontal = 12.dp, vertical = 12.dp)) {
@@ -146,14 +156,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun Pane(title: String, content: @Composable ColumnScope.() -> Unit) {
+@Composable internal fun Pane(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth().border(1.dp, Rule).background(Color.White)) {
         Label(title, Modifier.fillMaxWidth().background(Blue).padding(10.dp), Color.White, mono = true)
         content()
     }
 }
 
-private fun temperature(value: Double, fahrenheit: Boolean): String {
+internal fun temperature(value: Double, fahrenheit: Boolean): String {
     val displayed = if (fahrenheit) value * 9 / 5 + 32 else value
     return if (displayed.isFinite()) String.format(Locale.US, "%.1f %s", displayed, if (fahrenheit) "°F" else "°C") else "—"
 }
@@ -168,60 +178,62 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
     var correctionDialog by remember { mutableStateOf(false) }
     var emissivityText by remember { mutableStateOf("") }; var reflectedText by remember { mutableStateOf("") }
     var correctionError by remember { mutableStateOf("") }
+    var isothermDialog by remember { mutableStateOf(false) }
+    var isothermMode by remember { mutableStateOf(1) }
+    var isothermLower by remember { mutableStateOf("20") }; var isothermUpper by remember { mutableStateOf("30") }
+    var isothermError by remember { mutableStateOf("") }
+    if (state.fullScreen) { FullScreenView(state, model, surfaceCreated); return }
+    val compact = LocalConfiguration.current.screenWidthDp > LocalConfiguration.current.screenHeightDp
     Column(Modifier.fillMaxSize().background(Gray).safeDrawingPadding()) {
-        Row(Modifier.fillMaxWidth().background(Blue).padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(Modifier.fillMaxWidth().background(Blue).padding(horizontal = 12.dp, vertical = if (compact) 4.dp else 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Label("THERMAL FIELD", color = Color.White, mono = true, size = 18)
+            Action("Full screen") { model.fullScreen(true) }
             Action(if (state.fixture) "Demo" else if (state.network) "Network" else "USB", modifier = Modifier) { sourceDialog = true; model.editing(true) }
         }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        val live: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { viewportHeight ->
             Pane(if (state.fixture) "DEMO / SYNTHETIC TEMPERATURES" else "RADIOMETRIC VIEW / 256 × 192") {
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val ratio = if ((state.rotation + if (state.flip) 2 else 0) % 2 == 0) 4f / 3f else 3f / 4f
+                val height = minOf(maxWidth / ratio, viewportHeight)
+                ThermalViewport(state, model, ratio, Modifier.fillMaxWidth().height(height), surfaceCreated)
+                }
+                val visible = state.frame.frame > 0 && (state.connected || state.fixture) && state.frame.error.isEmpty()
+                Row(Modifier.fillMaxWidth().background(Light).padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    if (compact) {
+                        Label("MIN ${if (visible) temperature(state.frame.minimum, state.fahrenheit) else "—"}", mono = true, size = 12)
+                        Label("C ${if (visible) temperature(state.frame.center, state.fahrenheit) else "—"}", mono = true, size = 12)
+                        Label("MAX ${if (visible) temperature(state.frame.maximum, state.fahrenheit) else "—"}", mono = true, size = 12)
+                    } else {
+                        Column { Label("MIN", color = Color(0xff008ea1), mono = true); Label(if (visible) temperature(state.frame.minimum, state.fahrenheit) else "—", mono = true) }
+                        Column { Label("CENTER", mono = true); Label(if (visible) temperature(state.frame.center, state.fahrenheit) else "—", mono = true) }
+                        Column { Label("MAX", color = Color(0xffb3261e), mono = true); Label(if (visible) temperature(state.frame.maximum, state.fahrenheit) else "—", mono = true) }
+                    }
+                }
+                val lower = if (state.automatic) state.frame.minimum else state.lower.toDouble()
+                val upper = if (state.automatic) state.frame.maximum else state.upper.toDouble()
+                PaletteScale(state.palette)
+                Row(Modifier.fillMaxWidth().background(Light).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Label(if (visible || !state.automatic) temperature(lower, state.fahrenheit) else "—", mono = true)
+                    Label(if (state.automatic) "AUTO SCALE" else "LOCKED SCALE", mono = true)
+                    Label(if (visible || !state.automatic) temperature(upper, state.fahrenheit) else "—", mono = true)
+                }
+                Label(if (state.fixture) "Synthetic data · not a camera measurement" else if (state.corrected) "Corrected ε ${String.format(Locale.US, "%.3f", state.emissivity)} · reflected ${temperature(state.reflectedCelsius, state.fahrenheit)} · baseline/accuracy validation pending" else "Apparent temperatures · emissivity not applied · comparison validation pending",
+                    Modifier.fillMaxWidth().background(Color(0xfffff4dc)).padding(8.dp), size = 12)
+            }
+        }
+        val controls: @Composable () -> Unit = {
+            Pane("ORIENTATION") {
                 Row(Modifier.fillMaxWidth().background(Light).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Action("Rotate +90°", modifier = Modifier.weight(1f)) { model.rotate() }
                     Action("Mirror", state.mirror, modifier = Modifier.weight(1f)) { model.mirror() }
                     Action("Flip 180°", state.flip, modifier = Modifier.weight(1f)) { model.flip() }
                 }
                 Label("${((state.rotation + if (state.flip) 2 else 0) % 4) * 90}°${if (state.mirror) " · mirrored" else ""}", Modifier.padding(horizontal = 12.dp, vertical = 4.dp), mono = true)
-                BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val ratio = if ((state.rotation + if (state.flip) 2 else 0) % 2 == 0) 4f / 3f else 3f / 4f
-                val height = minOf(maxWidth / ratio, 360.dp)
-                Box(Modifier.fillMaxWidth().height(height)) {
-                AndroidView(factory = { context -> SurfaceView(context).apply {
-                    holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(holder: SurfaceHolder) { model.surface(holder.surface); surfaceCreated() }
-                        override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) { model.surface(holder.surface) }
-                        override fun surfaceDestroyed(holder: SurfaceHolder) { model.surface(null) }
-                    })
-                } }, modifier = Modifier.matchParentSize())
-                if ((!state.connected && !state.fixture) || state.frame.frame == 0L || state.frame.error.isNotEmpty()) {
-                    Box(Modifier.matchParentSize().background(Light), contentAlignment = Alignment.Center) {
-                        Label(if (state.busy) "CONNECTING" else "NO SIGNAL", mono = true, size = 18)
-                    }
-                } else if (state.busy || state.frame.ageMs > 300 || state.frame.unchangedMs > 300 && !state.fixture) {
-                    val badge = when {
-                        state.busy -> state.status
-                        state.frame.ageMs > 300 -> "FRAME STALLED · LAST IMAGE"
-                        else -> "LIVE TRANSPORT · DATA UNCHANGED"
-                    }
-                    Label(badge, Modifier.align(Alignment.TopCenter).background(Color(0xfffff4dc)).padding(8.dp), mono = true, size = 12)
-                }
-                }
-                }
-                val visible = state.frame.frame > 0
-                Row(Modifier.fillMaxWidth().background(Light).padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Column { Label("MIN", color = Color(0xff008ea1), mono = true); Label(if (visible) temperature(state.frame.minimum, state.fahrenheit) else "—", mono = true) }
-                    Column { Label("CENTER", mono = true); Label(if (visible) temperature(state.frame.center, state.fahrenheit) else "—", mono = true) }
-                    Column { Label("MAX", color = Color(0xffb3261e), mono = true); Label(if (visible) temperature(state.frame.maximum, state.fahrenheit) else "—", mono = true) }
-                }
-                val lower = if (state.automatic) state.frame.minimum else state.lower.toDouble()
-                val upper = if (state.automatic) state.frame.maximum else state.upper.toDouble()
-                PaletteScale(state.palette)
-                Row(Modifier.fillMaxWidth().background(Light).padding(10.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Label(if (visible || !state.automatic) temperature(lower, state.fahrenheit) else "—", mono = true)
-                    Label(if (state.automatic) "AUTO SCALE" else "LOCKED SCALE", mono = true)
-                    Label(if (visible || !state.automatic) temperature(upper, state.fahrenheit) else "—", mono = true)
-                }
-                Label(if (state.fixture) "Synthetic data · not a camera measurement" else if (state.corrected) "Corrected ε ${String.format(Locale.US, "%.3f", state.emissivity)} · reflected ${temperature(state.reflectedCelsius, state.fahrenheit)} · baseline/accuracy validation pending" else "Apparent temperatures · emissivity not applied · comparison validation pending",
-                    Modifier.fillMaxWidth().background(Color(0xfffff4dc)).padding(12.dp))
+            }
+            MeasurementsPane(state, model) {
+                fun display(value: Float) = if (state.fahrenheit) value * 1.8 + 32 else value.toDouble()
+                isothermLower = String.format(Locale.US, "%.1f", display(state.isothermLower)); isothermUpper = String.format(Locale.US, "%.1f", display(state.isothermUpper))
+                isothermMode = if (state.isothermMode == 0) 1 else state.isothermMode; isothermError = ""; isothermDialog = true; model.editing(true)
             }
             Pane("DISPLAY") {
                 Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -280,14 +292,34 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
                     if (frame.presentationSamples > 0) String.format(Locale.US, "Callback → presentation %.2f ms", frame.presentationMs) else "Presentation timestamp unavailable"), Modifier.padding(12.dp), mono = true)
             }
         }
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val availableHeight = maxHeight
+            if (maxWidth > maxHeight) {
+                Row(Modifier.fillMaxSize().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(Modifier.weight(0.56f)) { live(maxOf(40.dp, availableHeight - 165.dp)) }
+                    Column(Modifier.weight(0.44f)) {
+                        MeasurementToolbar(state, model)
+                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { controls() }
+                    }
+                }
+            } else {
+                Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MeasurementToolbar(state, model)
+                    live(maxOf(100.dp, availableHeight * 0.35f))
+                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { controls() }
+                }
+            }
+        }
         Column(Modifier.fillMaxWidth().border(1.dp, Rule).background(Gray).padding(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Action(if (state.saving) "Saving…" else "Capture", enabled = model.canCapture(), modifier = Modifier.weight(1f)) { model.capture() }
                 Action("Save raw", enabled = model.canCapture(), modifier = Modifier.weight(1f)) { model.capture(true) }
                 Action(if (state.lastCapture?.rawPreferred == true) "Share raw…" else "Share…", enabled = state.lastCapture != null && !state.saving, modifier = Modifier.weight(1f)) { sharing = true }
             }
-            if (state.captureMessage.isNotEmpty()) Label(state.captureMessage, Modifier.padding(top = 6.dp), mono = true, size = 12)
-            Label("Volume ↓ view · Volume ↑ / X raw", Modifier.padding(top = 4.dp), mono = true, size = 12)
+            if (!compact) {
+                if (state.captureMessage.isNotEmpty()) Label(state.captureMessage, Modifier.padding(top = 6.dp), mono = true, size = 12)
+                Label("Volume ↓ view · ↑ / X plane · both save all three files", Modifier.padding(top = 4.dp), mono = true, size = 12)
+            }
         }
         val status = when {
             state.frame.error.isNotEmpty() -> state.frame.error
@@ -296,7 +328,8 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
             state.connected && state.frame.unchangedMs > 300 -> "Live transport · radiometric data unchanged"
             else -> state.status
         }
-        Label(status, Modifier.fillMaxWidth().border(1.dp, Rule).background(Light).padding(12.dp), mono = true)
+        Label(if (compact && state.captureMessage.isNotEmpty()) "$status · ${state.captureMessage}" else status,
+            Modifier.fillMaxWidth().border(1.dp, Rule).background(Light).padding(horizontal = 12.dp, vertical = if (compact) 6.dp else 12.dp), mono = true, size = if (compact) 12 else 14)
     }
     if (sharing && state.lastCapture != null) Dialog(onDismissRequest = { sharing = false }) {
         Pane("SHARE CAPTURE") {
@@ -318,7 +351,29 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
                 Label("Experimental radiometric bridge URL")
                 BasicTextField(sourceAddress, { sourceAddress = it }, Modifier.fillMaxWidth().border(1.dp, Rule).background(Color.White).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 13.sp))
                 Action("Connect network bridge") { sourceDialog = false; model.editing(false); connectNetwork(sourceAddress) }
-                Label("Uses raw thermal-field-v1 frames. JPEG video alone cannot supply radiometric measurements.", size = 12)
+                Label("Requires original 256×384 composites and thermal-field-v1 protocol headers. Other thermal camera formats need an adapter.", size = 12)
+            }
+        }
+    }
+    if (isothermDialog) Dialog(onDismissRequest = { isothermDialog = false; model.editing(false) }) {
+        Pane("ISOTHERM / CURRENT TEMPERATURE MODEL") {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("Band", "Below", "Above").forEachIndexed { index, label -> Action(label, isothermMode == index+1, modifier = Modifier.weight(1f)) { isothermMode = index+1 } }
+                }
+                Label("Lower / below threshold ${if (state.fahrenheit) "°F" else "°C"}")
+                BasicTextField(isothermLower, { isothermLower = it }, Modifier.fillMaxWidth().border(1.dp, Rule).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                Label("Upper / above threshold ${if (state.fahrenheit) "°F" else "°C"}")
+                BasicTextField(isothermUpper, { isothermUpper = it }, Modifier.fillMaxWidth().border(1.dp, Rule).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                if (isothermError.isNotEmpty()) Label(isothermError, color = Color(0xffb3261e))
+                Action("Apply cyan highlight") {
+                    fun parse(text: String) = text.toFloatOrNull()?.let { if (state.fahrenheit) (it - 32) / 1.8f else it }
+                    val lower = parse(isothermLower); val upper = parse(isothermUpper)
+                    if (lower == null || upper == null || !lower.isFinite() || !upper.isFinite() || upper < lower) isothermError = "Enter finite limits, upper at least lower."
+                    else { model.measurementOptions(mode = isothermMode, lower = lower, upper = upper); isothermDialog = false; model.editing(false) }
+                }
+                Action("Disable isotherm") { model.measurementOptions(mode = 0); isothermDialog = false; model.editing(false) }
+                Label("Thresholds include their endpoints. Invalid correction solutions are excluded. Highlighting does not change the temperature words or span.", size = 12)
             }
         }
     }
@@ -362,7 +417,7 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
     }
 }
 
-@Composable private fun PaletteScale(palette: Int) {
+@Composable internal fun PaletteScale(palette: Int) {
     val colors = when (palette) {
         1 -> listOf(Color.Black, Color.White)
         2 -> listOf(Color(0xff000064), Color(0xff005aff), Color(0xff00dcb4), Color(0xffbeff00), Color(0xffff8c00), Color(0xffb40000))

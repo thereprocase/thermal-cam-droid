@@ -14,6 +14,18 @@ std::shared_ptr<thermal::Engine> engine(jlong id) {
 void fail(JNIEnv* env,const std::exception& error){env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),error.what());}
 }
 #define JNI_METHOD(name) Java_com_thereprocase_thermalfield_NativeBridge_##name
+extern "C" JNIEXPORT jlong JNICALL JNI_METHOD(measurementVersion)(JNIEnv* env,jobject,jlong id) {
+    try{return engine(id)->measurement_version();}catch(const std::exception& e){fail(env,e);return 0;}
+}
+extern "C" JNIEXPORT jint JNICALL JNI_METHOD(geometry)(JNIEnv* env,jobject,jlong id,jint measurement,jint kind,jdouble x0,jdouble y0,jdouble x1,jdouble y1) {
+    try{return engine(id)->geometry(measurement,kind,x0,y0,x1,y1);}catch(const std::exception& e){fail(env,e);return 0;}
+}
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(eraseGeometry)(JNIEnv* env,jobject,jlong id,jint measurement) {
+    try{engine(id)->erase_geometry(measurement);}catch(const std::exception& e){fail(env,e);}
+}
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(measurementOptions)(JNIEnv* env,jobject,jlong id,jint first,jint second,jint isotherm,jfloat lower,jfloat upper) {
+    try{engine(id)->measurement_options(first,second,isotherm,lower,upper);}catch(const std::exception& e){fail(env,e);}
+}
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(correction)(JNIEnv* env,jobject,jlong id,jdouble emissivity,jdouble reflected,jboolean corrected) {
     try{engine(id)->correction(emissivity,reflected,corrected);}catch(const std::exception& e){fail(env,e);}
 }
