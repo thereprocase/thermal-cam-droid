@@ -1,0 +1,541 @@
+#include "engine.hpp"
+#include <android/log.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES3/gl3.h>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <deque>
+#include <iomanip>
+#include <libusb.h>
+#include <sstream>
+#include <stdexcept>
+#include "orientation.hpp"
+
+namespace thermal {
+std::int64_t monotonic_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+std::string quote(const std::string& value) {
+    std::ostringstream out; out << '"';
+    for (unsigned char c : value) {
+        if (c == '"' || c == '\\') out << '\\' << c;
+        else if (c >= 32 && c < 127) out << c;
+        else out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(c) << std::dec;
+    }
+    out << '"'; return out.str();
+}
+
+namespace {
+class UsbTransport final : public p2pro::Transport {
+public:
+    UsbTransport(libusb_device_handle* handle, std::atomic<bool>& cancelled)
+        : handle_(handle), cancelled_(cancelled) {}
+    void write(std::uint16_t index, const std::vector<std::uint8_t>& data) override {
+        auto bytes = data; transfer(false, index, bytes);
+    }
+    std::vector<std::uint8_t> read(std::uint16_t index, std::size_t length) override {
+        std::vector<std::uint8_t> bytes(length); transfer(true, index, bytes); return bytes;
+    }
+private:
+    void transfer(bool input, std::uint16_t index, std::vector<std::uint8_t>& bytes) {
+        if (cancelled_.load()) throw std::runtime_error("Camera operation cancelled");
+        int result = libusb_control_transfer(handle_, input ? 0xc1 : 0x41, input ? 0x44 : 0x45,
+                                            0x78, index, bytes.data(), bytes.size(), 1000);
+        if (result < 0) throw std::runtime_error(std::string("USB control: ") + libusb_error_name(result));
+        if (result != static_cast<int>(bytes.size())) throw std::runtime_error("Short USB control transfer");
+    }
+    libusb_device_handle* handle_;
+    std::atomic<bool>& cancelled_;
+};
+
+void check_uvc(int result, const char* operation) {
+    if (result < 0) throw std::runtime_error(std::string(operation) + ": " + uvc_strerror(static_cast<uvc_error_t>(result)));
+}
+
+GLuint shader(GLenum type, const char* source) {
+    GLuint result = glCreateShader(type); glShaderSource(result, 1, &source, nullptr); glCompileShader(result);
+    GLint success = 0; glGetShaderiv(result, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char log[1024]{}; glGetShaderInfoLog(result, sizeof(log), nullptr, log); glDeleteShader(result);
+        throw std::runtime_error(std::string("Shader: ") + log);
+    }
+    return result;
+}
+
+const char* vertex_source = R"GLSL(#version 300 es
+out vec2 uv;
+void main() {
+    vec2 p = vec2((gl_VertexID & 1) == 0 ? -1.0 : 1.0, (gl_VertexID & 2) == 0 ? -1.0 : 1.0);
+    gl_Position = vec4(p,0.0,1.0); uv = vec2((p.x+1.0)*0.5,(1.0-p.y)*0.5);
+})GLSL";
+
+const char* fragment_source = R"GLSL(#version 300 es
+precision highp float;
+precision highp usampler2D;
+in vec2 uv;
+out vec4 color;
+uniform usampler2D rawPlane;
+uniform vec2 limits;
+uniform int palette;
+uniform int rotation;
+uniform bool mirrored;
+uniform ivec2 minPoint;
+uniform ivec2 maxPoint;
+vec3 ramp(float t) {
+    if (palette == 1) return vec3(t);
+    if (palette == 2) {
+        vec3 a[6] = vec3[6](vec3(0,0,100),vec3(0,90,255),vec3(0,220,180),vec3(190,255,0),vec3(255,140,0),vec3(180,0,0));
+        float p=t*5.0; int i=min(4,int(p)); return mix(a[i],a[i+1],p-float(i))/255.0;
+    }
+    vec3 a[6] = vec3[6](vec3(0),vec3(45,0,80),vec3(170,25,70),vec3(245,110,15),vec3(255,220,70),vec3(255));
+    float p=t*5.0; int i=min(4,int(p)); return mix(a[i],a[i+1],p-float(i))/255.0;
+}
+bool crossAt(ivec2 p, ivec2 origin) {
+    ivec2 d=abs(p-origin);return (d.x<=4 && d.y==0)||(d.y<=4 && d.x==0);
+}
+void main() {
+    vec2 q=uv;
+    if(mirrored)q.x=1.0-q.x;
+    if(rotation==1)q=vec2(q.y,1.0-q.x);
+    else if(rotation==2)q=vec2(1.0)-q;
+    else if(rotation==3)q=vec2(1.0-q.y,q.x);
+    ivec2 p=clamp(ivec2(q*vec2(256,192)),ivec2(0),ivec2(255,191));
+    float temperature=float(texelFetch(rawPlane,p,0).r)/64.0-273.15;
+    float t=clamp((temperature-limits.x)/max(limits.y-limits.x,0.015625),0.0,1.0);
+    vec3 rgb=ramp(t);
+    if (crossAt(p,minPoint)) rgb=vec3(0.0,0.95,1.0);
+    if (crossAt(p,maxPoint)) rgb=vec3(1.0,0.2,0.1);
+    if (crossAt(p,ivec2(128,96))) rgb=vec3(1.0);
+    color=vec4(rgb,1.0);
+})GLSL";
+
+struct Presentation {
+    EGLuint64KHR frame_id;
+    std::int64_t callback_ns;
+};
+
+class Renderer {
+public:
+    explicit Renderer(ANativeWindow* window) : window_(window) {
+        try {
+        display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+        if (!eglInitialize(display_, nullptr, nullptr)) throw std::runtime_error("EGL initialization failed");
+        const EGLint attrs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                                EGL_RED_SIZE,8,EGL_GREEN_SIZE,8,EGL_BLUE_SIZE,8,EGL_NONE};
+        EGLConfig config; EGLint count = 0;
+        if (!eglChooseConfig(display_, attrs, &config, 1, &count) || !count) throw std::runtime_error("No ES3 EGL configuration");
+        const EGLint ctx[] = {EGL_CONTEXT_CLIENT_VERSION,3,EGL_NONE};
+        context_ = eglCreateContext(display_,config,EGL_NO_CONTEXT,ctx);
+        surface_ = eglCreateWindowSurface(display_,config,window_,nullptr);
+        if (context_ == EGL_NO_CONTEXT || surface_ == EGL_NO_SURFACE || !eglMakeCurrent(display_,surface_,surface_,context_)) {
+            throw std::runtime_error("EGL Surface creation failed");
+        }
+        GLuint vs = shader(GL_VERTEX_SHADER,vertex_source), fs = shader(GL_FRAGMENT_SHADER,fragment_source);
+        program_ = glCreateProgram(); glAttachShader(program_,vs);glAttachShader(program_,fs);glLinkProgram(program_);
+        glDeleteShader(vs);glDeleteShader(fs);
+        GLint linked = 0;glGetProgramiv(program_,GL_LINK_STATUS,&linked);
+        if (!linked) throw std::runtime_error("Thermal shader link failed");
+        glGenVertexArrays(1,&vao_);glBindVertexArray(vao_);
+        glGenTextures(1,&texture_);glBindTexture(GL_TEXTURE_2D,texture_);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+        glTexStorage2D(GL_TEXTURE_2D,1,GL_R16UI,256,192);
+        eglSwapInterval(display_,1);
+        const char* extensions=eglQueryString(display_,EGL_EXTENSIONS);
+        if (extensions && std::strstr(extensions,"EGL_ANDROID_get_frame_timestamps")) {
+            next_frame_=reinterpret_cast<PFNEGLGETNEXTFRAMEIDANDROIDPROC>(eglGetProcAddress("eglGetNextFrameIdANDROID"));
+            timestamps_=reinterpret_cast<PFNEGLGETFRAMETIMESTAMPSANDROIDPROC>(eglGetProcAddress("eglGetFrameTimestampsANDROID"));
+            if (!eglSurfaceAttrib(display_,surface_,EGL_TIMESTAMPS_ANDROID,EGL_TRUE)) timestamps_=nullptr;
+        }
+        } catch (...) { shutdown(); throw; }
+    }
+    ~Renderer() { shutdown(); }
+    void shutdown() {
+        if (display_ != EGL_NO_DISPLAY) {
+            if (context_ != EGL_NO_CONTEXT) {
+                eglMakeCurrent(display_,surface_,surface_,context_);
+                glDeleteTextures(1,&texture_);glDeleteProgram(program_);glDeleteVertexArrays(1,&vao_);
+            }
+            eglMakeCurrent(display_,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);
+            if (surface_ != EGL_NO_SURFACE) eglDestroySurface(display_,surface_);
+            if (context_ != EGL_NO_CONTEXT) eglDestroyContext(display_,context_);
+            eglTerminate(display_);
+            display_=EGL_NO_DISPLAY;context_=EGL_NO_CONTEXT;surface_=EGL_NO_SURFACE;
+        }
+    }
+    double draw(const Frame& frame) {
+        EGLint width=0,height=0;eglQuerySurface(display_,surface_,EGL_WIDTH,&width);eglQuerySurface(display_,surface_,EGL_HEIGHT,&height);
+        glViewport(0,0,width,height);glClearColor(0.06f,0.06f,0.06f,1);glClear(GL_COLOR_BUFFER_BIT);
+        const int rotation=(frame.display.rotation+(frame.display.flip ? 2:0))%4;
+        const int image_width=rotation%2 ? 192:256,image_height=rotation%2 ? 256:192;
+        int w=width,h=width*image_height/image_width;
+        if (h>height) { h=height;w=height*image_width/image_height; }
+        glViewport((width-w)/2,(height-h)/2,w,h);
+        glUseProgram(program_);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,texture_);
+        glPixelStorei(GL_UNPACK_ALIGNMENT,2);
+        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,256,192,GL_RED_INTEGER,GL_UNSIGNED_SHORT,frame.plane.data());
+        glUniform1i(glGetUniformLocation(program_,"rawPlane"),0);
+        float lower=frame.display.automatic ? frame.minimum : frame.display.lower;
+        float upper=frame.display.automatic ? frame.maximum : frame.display.upper;
+        glUniform2f(glGetUniformLocation(program_,"limits"),lower,upper);
+        glUniform1i(glGetUniformLocation(program_,"palette"),frame.display.palette);
+        glUniform1i(glGetUniformLocation(program_,"rotation"),rotation);
+        glUniform1i(glGetUniformLocation(program_,"mirrored"),frame.display.mirror);
+        glUniform2i(glGetUniformLocation(program_,"minPoint"),frame.min_index%256,frame.min_index/256);
+        glUniform2i(glGetUniformLocation(program_,"maxPoint"),frame.max_index%256,frame.max_index/256);
+        glBindVertexArray(vao_);glDrawArrays(GL_TRIANGLE_STRIP,0,4);
+        EGLuint64KHR id=0;
+        if (timestamps_ && next_frame_ && next_frame_(display_,surface_,&id)) {
+            if(pending_.size()==64)pending_.pop_front();
+            pending_.push_back({id,frame.callback_ns});
+        }
+        if (!eglSwapBuffers(display_,surface_)) throw std::runtime_error("EGL swap failed");
+        return (monotonic_ns()-frame.callback_ns)/1e6;
+    }
+    std::vector<std::uint8_t> capture(const Frame& frame) {
+        const int rotation=(frame.display.rotation+(frame.display.flip ? 2:0))%4;
+        const int width=rotation%2 ? 192:256,height=rotation%2 ? 256:192;
+        GLuint image=0,framebuffer=0;
+        glGenTextures(1,&image);glBindTexture(GL_TEXTURE_2D,image);
+        glTexStorage2D(GL_TEXTURE_2D,1,GL_RGBA8,width,height);
+        glGenFramebuffers(1,&framebuffer);glBindFramebuffer(GL_FRAMEBUFFER,framebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,image,0);
+        if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE) {
+            glBindFramebuffer(GL_FRAMEBUFFER,0);glDeleteFramebuffers(1,&framebuffer);glDeleteTextures(1,&image);
+            throw std::runtime_error("Capture framebuffer incomplete");
+        }
+        glViewport(0,0,width,height);glUseProgram(program_);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,texture_);
+        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,256,192,GL_RED_INTEGER,GL_UNSIGNED_SHORT,frame.plane.data());
+        glUniform1i(glGetUniformLocation(program_,"rawPlane"),0);
+        glUniform2f(glGetUniformLocation(program_,"limits"),frame.display.automatic ? frame.minimum:frame.display.lower,
+                   frame.display.automatic ? frame.maximum:frame.display.upper);
+        glUniform1i(glGetUniformLocation(program_,"palette"),frame.display.palette);
+        glUniform1i(glGetUniformLocation(program_,"rotation"),rotation);
+        glUniform1i(glGetUniformLocation(program_,"mirrored"),frame.display.mirror);
+        glUniform2i(glGetUniformLocation(program_,"minPoint"),frame.min_index%256,frame.min_index/256);
+        glUniform2i(glGetUniformLocation(program_,"maxPoint"),frame.max_index%256,frame.max_index/256);
+        glBindVertexArray(vao_);glDrawArrays(GL_TRIANGLE_STRIP,0,4);
+        std::vector<std::uint8_t> bytes(width*height*4);
+        glPixelStorei(GL_PACK_ALIGNMENT,1);glReadPixels(0,0,width,height,GL_RGBA,GL_UNSIGNED_BYTE,bytes.data());
+        const GLenum error=glGetError();
+        glBindFramebuffer(GL_FRAMEBUFFER,0);glDeleteFramebuffers(1,&framebuffer);glDeleteTextures(1,&image);
+        if(error!=GL_NO_ERROR)throw std::runtime_error("Capture pixel readback failed");
+        return bytes;
+    }
+    std::vector<double> presentations() {
+        std::vector<double> result;
+        while (timestamps_ && !pending_.empty()) {
+            EGLint name=EGL_DISPLAY_PRESENT_TIME_ANDROID;EGLnsecsANDROID stamp=EGL_TIMESTAMP_PENDING_ANDROID;
+            if (!timestamps_(display_,surface_,pending_.front().frame_id,1,&name,&stamp)) {pending_.pop_front();continue;}
+            if (stamp==EGL_TIMESTAMP_PENDING_ANDROID) break;
+            if (stamp>0) result.push_back((stamp-pending_.front().callback_ns)/1e6);
+            pending_.pop_front();
+        }
+        return result;
+    }
+private:
+    ANativeWindow* window_;
+    EGLDisplay display_=EGL_NO_DISPLAY;EGLContext context_=EGL_NO_CONTEXT;EGLSurface surface_=EGL_NO_SURFACE;
+    GLuint texture_=0,program_=0,vao_=0;
+    PFNEGLGETNEXTFRAMEIDANDROIDPROC next_frame_=nullptr;
+    PFNEGLGETFRAMETIMESTAMPSANDROIDPROC timestamps_=nullptr;
+    std::deque<Presentation> pending_;
+};
+} // namespace
+
+Engine::Engine() {render_thread_=std::thread(&Engine::render_loop,this);}
+Engine::~Engine() {
+    stop();quitting_=true;condition_.notify_all();render_thread_.join();
+    if (desired_window_) ANativeWindow_release(desired_window_);
+}
+void Engine::set_surface(ANativeWindow* window) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (desired_window_) ANativeWindow_release(desired_window_);
+    desired_window_=window;++window_generation_;condition_.notify_all();
+}
+void Engine::configure(int palette,bool flip,int rotation,bool mirror,bool automatic,float lower,float upper) {
+    if (palette<0 || palette>2 || rotation<0 || rotation>3 || !std::isfinite(lower) || !std::isfinite(upper) || upper<=lower) throw std::invalid_argument("Invalid display settings");
+    std::lock_guard<std::mutex> lock(mutex_);settings_={palette,flip,rotation,mirror,automatic,lower,upper};
+}
+void Engine::cancel() {cancelled_=true;condition_.notify_all();}
+void Engine::close_session() {
+    cancelled_=true;
+    if (replay_thread_.joinable()) replay_thread_.join();
+    if (streaming_) {uvc_stop_streaming(device_);streaming_=false;}
+    camera_.reset();transport_.reset();
+    if (device_) {uvc_close(device_);device_=nullptr;}
+    if (context_) {uvc_exit(context_);context_=nullptr;}
+}
+void Engine::reset_frames(bool fixture) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++capture_generation_;
+    while(queue_size_) {
+        occupied_[queue_[queue_head_]]=false;queue_head_=(queue_head_+1)%4;--queue_size_;
+    }
+    queue_tail_=queue_head_;
+    last_presented_=Frame{};
+    fixture_=fixture;network_=false;error_.clear();identity_="{}";gain_mode_=1;command_active_=false;
+    received_=rendered_=malformed_=overflow_=0;first_callback_ns_=last_callback_ns_=last_change_ns_=0;
+    source_sequence_gaps_=0;source_sequence_seen_=false;
+    swap_latency_ms_=max_swap_latency_ms_=presentation_latency_ms_=0;presentation_samples_=0;
+}
+void Engine::stop() {cancel();std::lock_guard<std::mutex> lock(operation_mutex_);close_session();reset_frames(false);}
+
+std::string Engine::open(int fd) {
+    std::lock_guard<std::mutex> operation(operation_mutex_);close_session();cancelled_=false;
+    reset_frames(false);
+    try {
+        libusb_set_option(nullptr,LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
+        check_uvc(uvc_init(&context_,nullptr),"UVC initialization");
+        check_uvc(uvc_wrap(fd,context_,&device_),"Wrap USB fd");
+        uvc_stream_ctrl_t ctrl{};
+        check_uvc(uvc_get_stream_ctrl_format_size(device_,&ctrl,UVC_FRAME_FORMAT_YUYV,256,384,25),"Negotiate raw stream");
+        check_uvc(uvc_start_streaming(device_,&ctrl,callback,this,0),"Start raw stream");streaming_=true;
+        transport_=std::make_unique<UsbTransport>(uvc_get_libusb_handle(device_),cancelled_);
+        camera_=std::make_unique<p2pro::Camera>(*transport_);
+        std::ostringstream identity;
+        auto string_info=[this](unsigned item) {auto bytes=camera_->device_info(item);return std::string(bytes.begin(),std::find(bytes.begin(),bytes.end(),0));};
+        identity << "{\"firmware\":" << quote(string_info(5)) << ",\"persistent_device_identifiers_included\":false,\"original_properties\":[";
+        for (int i=0;i<6;++i) {if(i)identity<<',';identity<<camera_->property(static_cast<p2pro::Property>(i));}
+        // This creates a repeatable register configuration, not an independently
+        // calibrated physical emissivity baseline; preserve that distinction.
+        const std::uint16_t baseline[]={32,300,300,128,128,1};
+        for (int i=0;i<6;++i) {
+            auto p=static_cast<p2pro::Property>(i);
+            if (camera_->property(p)!=baseline[i]) camera_->set_property(p,baseline[i]);
+        }
+        identity << "],\"configured_properties\":[";
+        for (int i=0;i<6;++i) {if(i)identity<<',';identity<<camera_->property(static_cast<p2pro::Property>(i));}
+        identity << "],\"physical_baseline_verified\":false}";
+        std::lock_guard<std::mutex> lock(mutex_);identity_=identity.str();return identity_;
+    } catch (...) {close_session();throw;}
+}
+
+void Engine::replay(const std::vector<std::uint8_t>& bytes) {
+    if (bytes.size()!=CompositeBytes) throw std::invalid_argument("Fixture must be a complete composite frame");
+    std::lock_guard<std::mutex> operation(operation_mutex_);close_session();cancelled_=false;
+    reset_frames(true);
+    {std::lock_guard<std::mutex> lock(mutex_);identity_="{\"source\":\"captured fixture replay\"}";}
+    replay_thread_=std::thread([this,bytes] {
+        auto deadline=std::chrono::steady_clock::now();
+        while(!cancelled_) {ingest(bytes.data(),bytes.size(),512);deadline+=std::chrono::milliseconds(40);std::this_thread::sleep_until(deadline);}
+    });
+}
+void Engine::begin_network() {
+    std::lock_guard<std::mutex> operation(operation_mutex_);close_session();cancelled_=false;reset_frames(false);
+    std::lock_guard<std::mutex> lock(mutex_);network_=true;gain_mode_=-1;
+    identity_="{\"source\":\"network\",\"protocol\":\"thermal-field-v1\",\"physical_baseline_verified\":false}";
+}
+void Engine::network_frame(const std::vector<std::uint8_t>& bytes,std::uint32_t sequence) {
+    if(cancelled_)return;
+    if(bytes.size()!=CompositeBytes)throw std::invalid_argument("Invalid network composite frame size");
+    {
+        std::lock_guard<std::mutex> lock(mutex_);if(!network_)return;
+        if(source_sequence_seen_){const std::uint32_t delta=sequence-last_source_sequence_;if(delta>1&&delta<0x80000000u)source_sequence_gaps_+=delta-1;}
+        source_sequence_seen_=true;last_source_sequence_=sequence;
+    }
+    ingest(bytes.data(),bytes.size(),512);
+}
+void Engine::callback(uvc_frame_t* frame,void* user) {
+    auto* engine=static_cast<Engine*>(user);
+    if(engine->cancelled_)return;
+    {
+        std::lock_guard<std::mutex> lock(engine->mutex_);
+        if(engine->source_sequence_seen_) {
+            const std::uint32_t delta=frame->sequence-engine->last_source_sequence_;
+            if(delta>1 && delta<0x80000000u)engine->source_sequence_gaps_+=delta-1;
+        }
+        engine->source_sequence_seen_=true;engine->last_source_sequence_=frame->sequence;
+    }
+    if(frame->width!=256 || frame->height!=384 || frame->frame_format!=UVC_FRAME_FORMAT_YUYV) {
+        std::lock_guard<std::mutex> lock(engine->mutex_);++engine->malformed_;return;
+    }
+    engine->ingest(static_cast<const std::uint8_t*>(frame->data),frame->data_bytes,frame->step ? frame->step : 512);
+}
+void Engine::ingest(const std::uint8_t* bytes,std::size_t length,std::size_t stride) {
+    const auto stamp=monotonic_ns();
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++received_;
+    if(!bytes || stride<512 || stride>length/384) {++malformed_;return;}
+    if(!first_callback_ns_)first_callback_ns_=stamp;last_callback_ns_=stamp;
+    int slot=-1;for(int i=0;i<4;++i)if(!occupied_[i]){slot=i;break;}
+    if(slot<0){++overflow_;return;}
+    Frame& frame=frames_[slot];frame.sequence=received_;frame.generation=capture_generation_;frame.callback_ns=stamp;frame.display=settings_;
+    frame.utc_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    frame.fixture=fixture_;frame.network=network_;
+    frame.gain=gain_mode_;frame.command_active=command_active_;
+    for(unsigned y=0;y<384;++y)std::memcpy(frame.composite.data()+y*512,bytes+y*stride,512);
+    std::uint64_t hash=14695981039346656037ULL;
+    std::uint16_t minimum=65535,maximum=0;frame.min_index=frame.max_index=0;
+    for(unsigned i=0;i<PixelCount;++i) {
+        auto offset=98304+i*2;auto raw=std::uint16_t(frame.composite[offset])|std::uint16_t(frame.composite[offset+1]<<8);
+        frame.plane[i]=raw;hash^=raw;hash*=1099511628211ULL;
+        if(raw<minimum){minimum=raw;frame.min_index=i;}if(raw>maximum){maximum=raw;frame.max_index=i;}
+    }
+    if(hash!=last_hash_ || !last_change_ns_){last_hash_=hash;last_change_ns_=stamp;}
+    frame.minimum=p2pro::celsius(minimum);frame.maximum=p2pro::celsius(maximum);frame.center=p2pro::celsius(frame.plane[96*256+128]);
+    occupied_[slot]=true;queue_[queue_tail_]=slot;queue_tail_=(queue_tail_+1)%4;++queue_size_;condition_.notify_all();
+}
+
+void Engine::nuc(){
+    std::lock_guard<std::mutex> operation(operation_mutex_);if(!camera_)throw std::runtime_error("NUC requires a connected camera");
+    {std::lock_guard<std::mutex> lock(mutex_);command_active_=true;}
+    try{camera_->nuc();}catch(...){std::lock_guard<std::mutex> lock(mutex_);command_active_=false;throw;}
+    {std::lock_guard<std::mutex> lock(mutex_);command_active_=false;}
+}
+void Engine::gain(bool high){
+    std::lock_guard<std::mutex> operation(operation_mutex_);if(!camera_)throw std::runtime_error("Gain requires a connected camera");
+    {std::lock_guard<std::mutex> lock(mutex_);command_active_=true;gain_mode_=-1;}
+    try{
+        camera_->set_property(p2pro::Property::HighGain,high ? 1:0);
+        auto readback=camera_->property(p2pro::Property::HighGain);
+        if(readback!=(high ? 1:0))throw std::runtime_error("Gain readback differs from requested mode");
+        std::lock_guard<std::mutex> lock(mutex_);gain_mode_=readback;command_active_=false;
+    }catch(...){std::lock_guard<std::mutex> lock(mutex_);command_active_=false;throw;}
+}
+
+void Engine::render_loop() {
+    std::unique_ptr<Renderer> renderer;ANativeWindow* window=nullptr;std::uint64_t generation=0;
+    auto last_log=monotonic_ns();
+    while(!quitting_) {
+        int slot=-1;ANativeWindow* replacement=nullptr;bool replace=false;
+        std::shared_ptr<CaptureRequest> capture_request;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            condition_.wait_for(lock,std::chrono::milliseconds(16),[&]{return quitting_ || window_generation_!=generation || ((queue_size_ || !capture_requests_.empty()) && renderer);});
+            if(quitting_)break;
+            if(window_generation_!=generation) {
+                generation=window_generation_;replacement=desired_window_;if(replacement)ANativeWindow_acquire(replacement);replace=true;
+            } else if(queue_size_ && renderer) {
+                slot=queue_[queue_head_];queue_head_=(queue_head_+1)%4;--queue_size_;
+            } else if(!capture_requests_.empty() && renderer) {
+                capture_request=capture_requests_.front();capture_requests_.erase(capture_requests_.begin());
+            }
+        }
+        if(replace) {
+            renderer.reset();if(window)ANativeWindow_release(window);window=replacement;
+            if(window)try{renderer=std::make_unique<Renderer>(window);}catch(const std::exception& e){std::lock_guard<std::mutex> lock(mutex_);error_=e.what();}
+            continue;
+        }
+        if(slot>=0) {
+            try {
+                bool current=false;
+                {std::lock_guard<std::mutex> lock(mutex_);current=frames_[slot].generation==capture_generation_;}
+                if(current) {
+                    double latency=renderer->draw(frames_[slot]);
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if(frames_[slot].generation==capture_generation_) {
+                        ++rendered_;last_presented_=frames_[slot];
+                        swap_latency_ms_=latency;max_swap_latency_ms_=std::max(max_swap_latency_ms_,latency);
+                    }
+                }
+            } catch(const std::exception& e) {std::lock_guard<std::mutex> lock(mutex_);error_=e.what();renderer.reset();}
+            {std::lock_guard<std::mutex> lock(mutex_);occupied_[slot]=false;}
+        }
+        if(capture_request) {
+            std::lock_guard<std::mutex> lock(capture_request->mutex);
+            try{capture_request->rgba=renderer->capture(capture_request->frame);}
+            catch(const std::exception& error){capture_request->error=error.what();}
+            capture_request->done=true;capture_request->condition.notify_all();
+        }
+        if(renderer) {
+            auto latencies=renderer->presentations();
+            std::lock_guard<std::mutex> lock(mutex_);
+            for(double latency:latencies){presentation_latency_ms_=latency;++presentation_samples_;}
+        }
+        if(monotonic_ns()-last_log>1000000000LL) {
+            auto text=summary();__android_log_print(ANDROID_LOG_INFO,"ThermalField","%s",text.c_str());last_log=monotonic_ns();
+        }
+    }
+    renderer.reset();if(window)ANativeWindow_release(window);
+}
+std::string Engine::summary() {
+    std::lock_guard<std::mutex> lock(mutex_);const auto now=monotonic_ns();
+    double elapsed=(last_callback_ns_-first_callback_ns_)/1e9;
+    std::ostringstream out;out<<std::setprecision(12)<<"{\"frame\":"<<last_presented_.sequence
+        <<",\"source\":"<<quote(fixture_ ? "fixture" : network_ ? "network":"camera")<<",\"minimum\":"<<last_presented_.minimum
+        <<",\"maximum\":"<<last_presented_.maximum<<",\"center\":"<<last_presented_.center
+        <<",\"received\":"<<received_<<",\"rendered\":"<<rendered_<<",\"malformed\":"<<malformed_<<",\"overflow\":"<<overflow_
+        <<",\"source_sequence_gaps\":"<<source_sequence_gaps_
+        <<",\"fps\":"<<(elapsed>0 ? (received_-1)/elapsed : 0)<<",\"frame_age_ms\":"<<(last_callback_ns_ ? (now-last_callback_ns_)/1e6 : -1)
+        <<",\"unchanged_ms\":"<<(last_change_ns_ ? (now-last_change_ns_)/1e6 : -1)
+        <<",\"callback_to_swap_ms\":"<<swap_latency_ms_<<",\"max_callback_to_swap_ms\":"<<max_swap_latency_ms_
+        <<",\"presentation_latency_ms\":"<<presentation_latency_ms_<<",\"presentation_samples\":"<<presentation_samples_
+        <<",\"rotation_degrees\":"<<((last_presented_.display.rotation+(last_presented_.display.flip ? 2:0))%4)*90
+        <<",\"mirrored\":"<<(last_presented_.display.mirror ? "true":"false")
+        <<",\"error\":"<<quote(error_)<<",\"identity\":"<<identity_<<'}';return out.str();
+}
+std::vector<std::uint8_t> Engine::dump_frame(){std::lock_guard<std::mutex> lock(mutex_);if(!last_presented_.sequence)throw std::runtime_error("No displayed frame yet");return {last_presented_.composite.begin(),last_presented_.composite.end()};}
+std::vector<std::uint8_t> Engine::snapshot() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const Frame& frame=last_presented_;
+    if(!frame.sequence)throw std::runtime_error("No displayed frame yet");
+    std::ostringstream json;json<<std::setprecision(12)
+        <<"{\"frame\":"<<frame.sequence<<",\"session_generation\":"<<frame.generation
+        <<",\"timestamp_unix_ns\":"<<frame.utc_ns<<",\"callback_monotonic_ns\":"<<frame.callback_ns
+        <<",\"timestamp_basis\":\"receiver callback\",\"source\":"<<quote(frame.fixture ? "fixture":frame.network ? "network":"camera")
+        <<",\"width\":256,\"composite_height\":384,\"plane_height\":192,\"stride\":512,\"format\":\"YUYV\""
+        <<",\"minimum_celsius\":"<<frame.minimum<<",\"maximum_celsius\":"<<frame.maximum<<",\"center_celsius\":"<<frame.center
+        <<",\"palette\":"<<frame.display.palette<<",\"automatic_span\":"<<(frame.display.automatic ? "true":"false")
+        <<",\"lower_celsius\":"<<(frame.display.automatic ? frame.minimum:frame.display.lower)
+        <<",\"upper_celsius\":"<<(frame.display.automatic ? frame.maximum:frame.display.upper)
+        <<",\"rotation_degrees\":"<<((frame.display.rotation+(frame.display.flip ? 2:0))%4)*90
+        <<",\"mirrored\":"<<(frame.display.mirror ? "true":"false")<<",\"identity\":"<<identity_<<'}';
+    const std::string metadata=json.str();const std::uint32_t size=metadata.size();
+    std::vector<std::uint8_t> result;result.reserve(4+size+CompositeBytes);
+    for(int shift : {24,16,8,0})result.push_back(static_cast<std::uint8_t>(size>>shift));
+    result.insert(result.end(),metadata.begin(),metadata.end());result.insert(result.end(),frame.composite.begin(),frame.composite.end());return result;
+}
+std::vector<std::uint8_t> Engine::capture() {
+    auto request=std::make_shared<CaptureRequest>();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if(!last_presented_.sequence || !desired_window_)throw std::runtime_error("No displayed frame to capture");
+        request->frame=last_presented_;request->identity=identity_;
+        capture_requests_.push_back(request);condition_.notify_all();
+    }
+    {
+        std::unique_lock<std::mutex> lock(request->mutex);
+        if(!request->condition.wait_for(lock,std::chrono::seconds(5),[&]{return request->done;})) {
+            lock.unlock();std::lock_guard<std::mutex> engine_lock(mutex_);
+            capture_requests_.erase(std::remove(capture_requests_.begin(),capture_requests_.end(),request),capture_requests_.end());
+            throw std::runtime_error("Capture renderer timeout");
+        }
+        if(!request->error.empty())throw std::runtime_error(request->error);
+    }
+    const Frame& frame=request->frame;
+    const unsigned rotation=(frame.display.rotation+(frame.display.flip ? 2:0))%4;
+    const int width=rotation%2 ? 192:256,height=rotation%2 ? 256:192;
+    p2pro::Orientation orientation{rotation,frame.display.mirror};
+    auto point=[&](unsigned index){return orientation.to_display({((index%256)+.5)/256,((index/256)+.5)/192});};
+    auto minimum=point(frame.min_index),maximum=point(frame.max_index),center=point(96*256+128);
+    std::ostringstream json;json<<std::setprecision(12)
+        <<"{\"frame\":"<<frame.sequence<<",\"session_generation\":"<<frame.generation
+        <<",\"timestamp_unix_ns\":"<<frame.utc_ns<<",\"callback_monotonic_ns\":"<<frame.callback_ns
+        <<",\"timestamp_basis\":\"receiver callback\",\"source\":"<<quote(frame.fixture ? "fixture":frame.network ? "network":"camera")
+        <<",\"rendered_width\":"<<width<<",\"rendered_height\":"<<height
+        <<",\"minimum_celsius\":"<<frame.minimum<<",\"maximum_celsius\":"<<frame.maximum<<",\"center_celsius\":"<<frame.center
+        <<",\"min_display\":["<<minimum.x<<','<<minimum.y<<"],\"max_display\":["<<maximum.x<<','<<maximum.y
+        <<"],\"center_display\":["<<center.x<<','<<center.y<<']'
+        <<",\"palette\":"<<quote(frame.display.palette==0 ? "ironbow":frame.display.palette==1 ? "white_hot":"rainbow")
+        <<",\"automatic_span\":"<<(frame.display.automatic ? "true":"false")
+        <<",\"lower_celsius\":"<<(frame.display.automatic ? frame.minimum:frame.display.lower)
+        <<",\"upper_celsius\":"<<(frame.display.automatic ? frame.maximum:frame.display.upper)
+        <<",\"rotation_degrees\":"<<rotation*90<<",\"mirrored\":"<<(frame.display.mirror ? "true":"false")
+        <<",\"gain_mode\":"<<quote(frame.gain<0 ? "unknown":frame.gain==0 ? "low":"high")
+        <<",\"command_active\":"<<(frame.command_active ? "true":"false")
+        <<",\"frame_age_at_snapshot_ms\":"<<(monotonic_ns()-frame.callback_ns)/1e6
+        <<",\"emissivity\":1,\"reflected_apparent_celsius\":20,\"correction_applied\":false,\"identity\":"<<request->identity<<'}';
+    const std::string metadata=json.str();const std::uint32_t size=metadata.size();
+    std::vector<std::uint8_t> result;result.reserve(4+size+CompositeBytes+request->rgba.size());
+    for(int shift : {24,16,8,0})result.push_back(static_cast<std::uint8_t>(size>>shift));
+    result.insert(result.end(),metadata.begin(),metadata.end());result.insert(result.end(),frame.composite.begin(),frame.composite.end());
+    result.insert(result.end(),request->rgba.begin(),request->rgba.end());return result;
+}
+} // namespace thermal

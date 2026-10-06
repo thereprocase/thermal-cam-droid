@@ -1,0 +1,340 @@
+package com.thereprocase.thermalfield
+
+import android.Manifest
+import android.app.Application
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbDeviceConnection
+import android.hardware.usb.UsbManager
+import android.util.Log
+import android.view.Surface
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import java.io.File
+import java.time.Instant
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+
+data class FrameTelemetry(
+    val frame: Long = 0, val minimum: Double = 0.0, val maximum: Double = 0.0,
+    val center: Double = 0.0, val received: Long = 0, val rendered: Long = 0,
+    val malformed: Long = 0, val overflow: Long = 0, val fps: Double = 0.0,
+    val sourceSequenceGaps: Long = 0,
+    val ageMs: Double = -1.0, val unchangedMs: Double = -1.0,
+    val swapMs: Double = 0.0, val presentationMs: Double = 0.0,
+    val presentationSamples: Long = 0, val error: String = "",
+)
+
+data class CameraUiState(
+    val status: String = "Attach camera", val connected: Boolean = false,
+    val fixture: Boolean = false, val busy: Boolean = false, val palette: Int = 0,
+    val flip: Boolean = false, val fahrenheit: Boolean = false, val rotationLocked: Boolean = false,
+    val rotation: Int = 0, val mirror: Boolean = false,
+    val automatic: Boolean = true, val lower: Float = 20f, val upper: Float = 30f,
+    val highGain: Boolean = true, val frame: FrameTelemetry = FrameTelemetry(),
+    val serial: String = "", val firmware: String = "", val captureMessage: String = "",
+    val saving: Boolean = false, val lastCapture: SavedCapture? = null,
+    val network: Boolean = false, val networkUrl: String = "", val gainKnown: Boolean = true,
+    val editing: Boolean = false,
+)
+
+class CameraViewModel(application: Application) : AndroidViewModel(application) {
+    private val context = application
+    private val manager = context.getSystemService(UsbManager::class.java)
+    private val bridge = NativeBridge()
+    private val engine = bridge.create()
+    private val worker = Executors.newSingleThreadExecutor { task -> Thread(task, "P2UsbCommands") }
+    private val captureWorker = Executors.newSingleThreadExecutor { task -> Thread(task, "ThermalCaptureIO") }
+    private val generation = AtomicLong(0)
+    private val preferences = context.getSharedPreferences("display", Context.MODE_PRIVATE)
+    private val permissionAction = "${context.packageName}.USB_PERMISSION"
+    private var connection: UsbDeviceConnection? = null
+    private var activeDevice: String? = null
+    @Volatile private var started = false
+    @Volatile private var surfaceReady = false
+    @Volatile private var closed = false
+    private var fixtureSelected = false
+    private var networkSelected = false
+    @Volatile private var networkFrames: NetworkFrames? = null
+    @Volatile private var commandPending = false
+    private var networkThread: Thread? = null
+    private var requestedDevice: String? = null
+    private val mutableState = MutableStateFlow(CameraUiState(
+        palette = preferences.getInt("palette", 0), flip = preferences.getBoolean("flip", false),
+        fahrenheit = preferences.getBoolean("fahrenheit", false),
+        rotationLocked = preferences.getBoolean("rotationLocked", false),
+        rotation = preferences.getInt("rotation", 0), mirror = preferences.getBoolean("mirror", false),
+        networkUrl = preferences.getString("networkUrl", "") ?: "",
+        automatic = preferences.getBoolean("automatic", true), lower = preferences.getFloat("lower", 20f), upper = preferences.getFloat("upper", 30f),
+    ))
+    val state = mutableState.asStateFlow()
+
+    private val receiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            when (intent.action) {
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> if (device?.isP2Pro() == true) cameraMode()
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    if (device?.deviceName == activeDevice || device?.deviceName == requestedDevice) disconnect("Camera detached")
+                }
+                permissionAction -> {
+                    if (intent.getLongExtra("generation", -1) != generation.get() || !started) return
+                    requestedDevice = null
+                    if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) open(device)
+                    else mutableState.update { it.copy(status = "USB access denied") }
+                }
+            }
+        }
+    }
+
+    init {
+        context.registerReceiver(receiver, IntentFilter().apply {
+            addAction(permissionAction)
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }, Context.RECEIVER_NOT_EXPORTED)
+        configure()
+        viewModelScope.launch(Dispatchers.Default) {
+            while (true) {
+                try {
+                    val json = JSONObject(bridge.summary(engine))
+                    val frame = FrameTelemetry(
+                        frame = json.getLong("frame"), minimum = json.getDouble("minimum"),
+                        maximum = json.getDouble("maximum"), center = json.getDouble("center"),
+                        received = json.getLong("received"), rendered = json.getLong("rendered"),
+                        malformed = json.getLong("malformed"), overflow = json.getLong("overflow"),
+                        sourceSequenceGaps = json.optLong("source_sequence_gaps"),
+                        fps = json.getDouble("fps"), ageMs = json.getDouble("frame_age_ms"),
+                        unchangedMs = json.getDouble("unchanged_ms"), swapMs = json.getDouble("callback_to_swap_ms"),
+                        presentationMs = json.getDouble("presentation_latency_ms"),
+                        presentationSamples = json.getLong("presentation_samples"), error = json.getString("error"),
+                    )
+                    mutableState.update { it.copy(frame = frame) }
+                } catch (error: Exception) { Log.e("ThermalField", "Telemetry read failed", error) }
+                delay(200)
+            }
+        }
+    }
+
+    private fun UsbDevice.isP2Pro() = vendorId == 0x0bda && productId == 0x5830
+
+    fun foreground() { started = true; when { networkSelected -> network(state.value.networkUrl); fixtureSelected -> fixture(); else -> connect() } }
+    fun background() { started = false; disconnect("Capture paused", keepSource = true) }
+
+    fun surface(surface: Surface?) {
+        if (closed) return
+        bridge.surface(engine, surface)
+        surfaceReady = surface != null
+        if (surfaceReady && started && !state.value.connected) {
+            when { networkSelected && !state.value.network -> network(state.value.networkUrl); fixtureSelected && !state.value.fixture -> fixture(); else -> connect() }
+        }
+    }
+
+    fun connect() {
+        if (!started || !surfaceReady || networkSelected || state.value.fixture || state.value.connected || state.value.busy || requestedDevice != null) return
+        if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            mutableState.update { it.copy(status = "Allow camera access for the USB camera") }; return
+        }
+        val device = manager.deviceList.values.firstOrNull { it.isP2Pro() }
+        if (device == null) { mutableState.update { it.copy(status = "Attach camera") }; return }
+        if (manager.hasPermission(device)) open(device)
+        else {
+            requestedDevice = device.deviceName
+            val token = generation.incrementAndGet()
+            mutableState.update { it.copy(status = "Waiting for USB permission") }
+            // Mutable extras are required for the system's USB result; package
+            // scoping prevents this permission token being used by another app.
+            val pending = PendingIntent.getBroadcast(context, token.toInt(),
+                Intent(permissionAction).setPackage(context.packageName).putExtra("generation", token),
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            manager.requestPermission(device, pending)
+        }
+    }
+
+    private fun open(device: UsbDevice) {
+        if (!started || !surfaceReady) return
+        val token = generation.incrementAndGet()
+        activeDevice = device.deviceName
+        mutableState.update { it.copy(status = "Opening camera", busy = true) }
+        worker.execute {
+            if (generation.get() != token || !started) return@execute
+            try {
+                closeConnection()
+                val opened = manager.openDevice(device) ?: error("Android could not open the USB device")
+                connection = opened
+                val identity = JSONObject(bridge.open(engine, opened.fileDescriptor))
+                if (generation.get() != token || !started) { closeConnection(); return@execute }
+                mutableState.update { it.copy(status = "Live", connected = true, fixture = false, busy = false,
+                    serial = identity.optString("serial"), firmware = identity.optString("firmware"), highGain = true, gainKnown = true, network = false) }
+            } catch (error: Exception) {
+                closeConnection()
+                if (generation.get() == token) mutableState.update { it.copy(status = error.message ?: "Camera open failed", busy = false, connected = false) }
+                Log.e("ThermalField", "Camera open failed", error)
+            }
+        }
+    }
+
+    private fun closeConnection() {
+        networkFrames?.close(); networkFrames = null
+        networkThread?.join(3000); networkThread = null
+        // UsbDeviceConnection owns the original descriptor. Native teardown
+        // drains its users before Java is allowed to close that descriptor.
+        bridge.stop(engine)
+        connection?.close(); connection = null
+    }
+
+    fun disconnect(message: String = "Disconnected", keepSource: Boolean = false) {
+        if (!keepSource) { fixtureSelected = false; networkSelected = false }
+        networkFrames?.close()
+        generation.incrementAndGet(); requestedDevice = null; activeDevice = null
+        bridge.cancel(engine)
+        mutableState.update { it.copy(status = message, connected = false, busy = false, fixture = false, network = false) }
+        worker.execute { closeConnection() }
+    }
+
+    fun fixture() {
+        fixtureSelected = true
+        networkSelected = false
+        if (!surfaceReady || !started) return
+        val token = generation.incrementAndGet()
+        bridge.cancel(engine)
+        mutableState.update { it.copy(status = "Fixture replay", fixture = true, connected = false, busy = true, serial = "", firmware = "") }
+        worker.execute {
+            try {
+                closeConnection()
+                if (generation.get() != token) return@execute
+                bridge.replay(engine, context.assets.open("fixture.yuyv").use { it.readBytes() })
+                mutableState.update { it.copy(status = "Fixture replay", busy = false) }
+            } catch (error: Exception) { mutableState.update { it.copy(status = error.message ?: "Fixture failed", busy = false) } }
+        }
+    }
+
+    fun cameraMode() { disconnect(); connect() }
+    fun network(url: String) {
+        val address = url.trim()
+        try {
+            val uri = java.net.URI(address)
+            require(uri.scheme in listOf("http", "https") && uri.host != null && uri.userInfo == null)
+        } catch (_: Exception) { mutableState.update { it.copy(captureMessage = "Enter an HTTP(S) radiometric bridge address") }; return }
+        networkSelected = true; fixtureSelected = false
+        mutableState.update { it.copy(networkUrl = address) }; preferences.edit().putString("networkUrl", address).apply()
+        if (!started || !surfaceReady) return
+        val token = generation.incrementAndGet(); bridge.cancel(engine); networkFrames?.close()
+        mutableState.update { it.copy(status = "Connecting network stream", connected = false, network = true, fixture = false, busy = true, gainKnown = false, serial = "", firmware = "") }
+        worker.execute {
+            closeConnection()
+            if (generation.get() != token || !started) return@execute
+            bridge.beginNetwork(engine)
+            val active = AtomicBoolean(true)
+            val client = NetworkFrames(address, active); networkFrames = client
+            networkThread = Thread({
+                try {
+                    client.frames { bytes, sequence ->
+                        if (generation.get() == token && started) {
+                            bridge.networkFrame(engine, bytes, sequence)
+                            mutableState.update { it.copy(status = if (commandPending) it.status else "Network live", connected = true, network = true, busy = commandPending) }
+                        }
+                    }
+                } catch (error: Exception) {
+                    if (generation.get() == token && started) mutableState.update { it.copy(status = "Network stream stopped: ${error.message ?: "Reconnect"}", connected = false, busy = false) }
+                }
+            }, "ThermalNetworkFrames").apply { start() }
+        }
+    }
+
+    fun command(nuc: Boolean, high: Boolean = true) {
+        if (!state.value.connected || state.value.busy) return
+        val token = generation.get()
+        commandPending = true
+        mutableState.update { it.copy(status = if (nuc) "Calibration command" else "Changing gain", busy = true) }
+        worker.execute {
+            try {
+                if (state.value.network) NetworkFrames.command(state.value.networkUrl, if (nuc) "nuc" else "gain", high)
+                else if (nuc) bridge.nuc(engine) else bridge.gain(engine, high)
+                if (generation.get() == token) mutableState.update { it.copy(status = "Live", busy = false,
+                    highGain = if (nuc) it.highGain else high, gainKnown = if (nuc) it.gainKnown else true) }
+            } catch (error: Exception) {
+                if (generation.get() == token) mutableState.update { it.copy(status = error.message ?: "Command failed", busy = false) }
+                Log.e("ThermalField", "Camera command failed", error)
+            } finally { commandPending = false }
+        }
+    }
+
+    fun palette(value: Int) { mutableState.update { it.copy(palette = value) }; preferences.edit().putInt("palette", value).apply(); configure() }
+    fun flip() { mutableState.update { it.copy(flip = !it.flip) }; preferences.edit().putBoolean("flip", state.value.flip).apply(); configure() }
+    fun units() { mutableState.update { it.copy(fahrenheit = !it.fahrenheit) }; preferences.edit().putBoolean("fahrenheit", state.value.fahrenheit).apply() }
+    fun rotationLock() { mutableState.update { it.copy(rotationLocked = !it.rotationLocked) }; preferences.edit().putBoolean("rotationLocked", state.value.rotationLocked).apply() }
+    fun rotate() { mutableState.update { it.copy(rotation = (it.rotation + 1) % 4) }; preferences.edit().putInt("rotation", state.value.rotation).apply(); configure() }
+    fun mirror() { mutableState.update { it.copy(mirror = !it.mirror) }; preferences.edit().putBoolean("mirror", state.value.mirror).apply(); configure() }
+    fun span(automatic: Boolean, lower: Float, upper: Float) {
+        if (!lower.isFinite() || !upper.isFinite() || upper <= lower) return
+        mutableState.update { it.copy(automatic = automatic, lower = lower, upper = upper) }
+        preferences.edit().putBoolean("automatic", automatic).putFloat("lower", lower).putFloat("upper", upper).apply(); configure()
+    }
+    fun editing(value: Boolean) { mutableState.update { it.copy(editing = value) } }
+    fun message(value: String) { mutableState.update { it.copy(captureMessage = value) } }
+    private fun configure() { state.value.let { bridge.configure(engine, it.palette, it.flip, it.rotation, it.mirror, it.automatic, it.lower, it.upper) } }
+
+    fun dumpFrame() {
+        if (!BuildConfig.DEBUG) return
+        worker.execute {
+            try {
+                val snapshot = bridge.snapshot(engine)
+                val length = ByteBuffer.wrap(snapshot, 0, 4).order(ByteOrder.BIG_ENDIAN).int
+                check(length > 0 && snapshot.size == length + 4 + 196608) { "Malformed frame snapshot" }
+                val metadata = JSONObject(String(snapshot, 4, length, Charsets.UTF_8))
+                val bytes = snapshot.copyOfRange(4 + length, snapshot.size)
+                val folder = File(context.getExternalFilesDir(null), "raw-frames").apply { mkdirs() }
+                val stem = Instant.now().toString().replace(":", "-")
+                File(folder, "$stem.yuyv").writeBytes(bytes)
+                metadata.put("app_version", BuildConfig.VERSION_NAME)
+                File(folder, "$stem.json").writeText(metadata.toString(2))
+                mutableState.update { it.copy(captureMessage = "Raw frame saved · ${bytes.size} bytes") }
+            } catch (error: Exception) { mutableState.update { it.copy(captureMessage = error.message ?: "Raw dump failed") } }
+        }
+    }
+
+    fun canCapture(): Boolean = state.value.let {
+        it.frame.frame > 0 && (it.connected || it.fixture) && !it.busy && !it.saving && !it.editing && it.frame.ageMs in 0.0..500.0 && it.frame.error.isEmpty()
+    }
+
+    fun capture(rawPreferred: Boolean = false) {
+        if (!canCapture()) return
+        val fahrenheit = state.value.fahrenheit
+        mutableState.update { it.copy(saving = true, captureMessage = "Saving capture…") }
+        captureWorker.execute {
+            try {
+                val saved = CaptureStore.save(context, bridge.capture(engine), fahrenheit, rawPreferred)
+                mutableState.update { it.copy(saving = false, lastCapture = saved,
+                    captureMessage = "Saved image, 16-bit plane and JSON · Downloads/ThermalField") }
+            } catch (error: Exception) {
+                mutableState.update { it.copy(saving = false, captureMessage = "Capture failed: ${error.message ?: "Try again"}") }
+                Log.e("ThermalField", "Capture failed", error)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        closed = true
+        started = false; generation.incrementAndGet(); context.unregisterReceiver(receiver); bridge.cancel(engine)
+        worker.execute { closeConnection(); bridge.destroy(engine) }
+        worker.shutdown()
+        captureWorker.shutdown()
+        super.onCleared()
+    }
+}
