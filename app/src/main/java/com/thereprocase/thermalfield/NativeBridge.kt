@@ -10,6 +10,7 @@ internal class NativeBridge {
     external fun destroy(id: Long)
     external fun surface(id: Long, surface: Surface?)
     external fun configure(id: Long, palette: Int, flip: Boolean, rotation: Int, mirror: Boolean, automatic: Boolean, lower: Float, upper: Float)
+    external fun correction(id: Long, emissivity: Double, reflectedCelsius: Double, corrected: Boolean)
     external fun open(id: Long, fd: Int): String
     external fun replay(id: Long, frame: ByteArray)
     external fun beginNetwork(id: Long)

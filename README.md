@@ -2,7 +2,7 @@
 
 An independent, open-source Android thermal viewer for the USB device `0bda:5830` used by the InfiRay P2 Pro. Built for building-enclosure thermography, with a Gridline interface, native capture and lossless radiometric export. This project is not affiliated with the camera manufacturer.
 
-**Development preview.** Live USB and experimental network capture have run on a Pixel 9 Pro. Measurement tools and correction integration are still in progress. Comparison against the official app on ice-water and approximately 55 °C water targets has **not** been completed; displayed temperatures are camera-apparent values, not independently validated surface temperatures.
+**Development preview.** Live USB, experimental network capture and host radiometric correction have run on a Pixel 9 Pro. Measurement tools are still in progress. Comparison against the official app on ice-water and approximately 55 °C water targets has **not** been completed; camera-apparent and model-corrected values are not independently validated surface temperatures.
 
 ## Current features
 
@@ -13,10 +13,15 @@ An independent, open-source Android thermal viewer for the USB device `0bda:5830
 - Capture an annotated PNG, original 16-bit grayscale radiometric PNG and JSON sidecar through MediaStore, under `Downloads/ThermalField`.
 - Volume Down captures the annotated view; Volume Up or X selects raw as the preferred share item. Every capture still saves all three files. Share one image, the raw plane or the complete set through Android's chooser.
 - Manual NUC and gain controls; frame-age and performance diagnostics; debug composite-frame dumps.
+- Global emissivity/reflected apparent temperature inputs and raw/corrected display using an integrated 8–14 µm Planck model. Extrema, center, GPU coloring and capture metadata share the same per-frame lookup table. Invalid solutions are magenta and excluded from extrema.
 - Original synthetic demo for UI development, explicitly labeled as synthetic.
 - Experimental lossless network source from the included desktop bridge. It requires this documented protocol; ordinary JPEG/MJPEG streams do not provide its radiometric plane.
 
-Planned: editable spots, boxes, line profiles, ΔT, isotherms, Android integration of the tested band-radiance correction core, saved-capture reanalysis and further lifecycle/accuracy qualification. See [feature scope](docs/FEATURES.md) and [validation](docs/VALIDATION.md).
+Planned: editable spots, boxes, line profiles, ΔT, isotherms, saved-capture reanalysis and further lifecycle/accuracy qualification. See [feature scope](docs/FEATURES.md) and [validation](docs/VALIDATION.md).
+
+<img src="docs/synthetic-export.png" width="320" alt="A rotated synthetic enclosure export with temperature markers, palette legend and an explicit synthetic-data caption">
+
+Original synthetic enclosure example, corrected at ε = 0.96 and reflected input 20 °C. The illustrated temperatures are test data, not a physical camera measurement. Source, correction inputs, legend and timestamp are measurement context rather than a branding watermark.
 
 ## Build and install
 
@@ -45,7 +50,15 @@ The received stream is 256 × 384 YUYV. The lower half contains unsigned little-
 
 The camera has readable/writable correction properties. Startup uses the bench-tested settings: distance 32, reflected/atmospheric temperature 300 K, emissivity/transmission 128, high gain. Register readback was checked, but the physical interpretation of this baseline has **not** been independently qualified. A maximum register value alone does not prove emissivity or transmission is physically one. JSON states this qualification explicitly. Network gain is currently exported as unknown until per-frame bridge state is integrated.
 
-The correction core integrates Planck radiance over 8–14 µm, assumes a flat spectral response and atmospheric transmission of one at short range, solves the single-band graybody equation and inverts a lookup table. It does not use a temperature-to-the-fourth approximation. This core is unit-tested but is not yet connected to the Android display. Current exports mark correction as unapplied; the default reflected temperature is an input default, not a measured environment value.
+The correction core integrates Planck radiance over 8–14 µm, assumes a flat spectral response and atmospheric transmission of one at short range, solves the single-band graybody equation and inverts a lookup table. It does not use a temperature-to-the-fourth approximation. Raw/corrected mode selects the display and numeric-readout model; the raw file always preserves the original camera words. The JSON records the actual selected mode and inputs. The default reflected temperature of 20 °C is an input default, not a measured environment value. Nonpositive solved radiance and temperatures outside the table domain are invalid, displayed as magenta, excluded from extrema and exported as JSON null readings where applicable.
+
+For numerical/export verification of a synthetic demo capture, install Pillow on the development host and run:
+
+```sh
+python3 tools/verify_capture.py fixtures/synthetic-enclosure.yuyv CAPTURE_raw.png CAPTURE.json
+```
+
+This compares every original word and evaluates min/max/center using finer direct Planck quadrature and bisection, independently of the app's interpolation table. Passing it does not establish physical camera accuracy.
 
 ## Experimental desktop bridge
 

@@ -12,6 +12,7 @@
 #include <libusb.h>
 #include <libuvc/libuvc.h>
 #include "p2pro_camera.hpp"
+#include "radiometry.hpp"
 
 namespace thermal {
 constexpr std::size_t PixelCount = 256 * 192;
@@ -24,6 +25,7 @@ struct DisplaySettings {
     bool mirror = false;
     bool automatic = true;
     float lower = 20, upper = 30;
+    std::shared_ptr<const p2pro::CorrectionTable> correction;
 };
 
 struct Frame {
@@ -39,6 +41,7 @@ struct Frame {
     bool command_active = false;
     double minimum = 0, maximum = 0, center = 0;
     unsigned min_index = 0, max_index = 0;
+    unsigned invalid_pixels = 0;
     DisplaySettings display;
 };
 struct CaptureRequest {
@@ -57,6 +60,7 @@ public:
     ~Engine();
     void set_surface(ANativeWindow* owned_window);
     void configure(int palette, bool flip, int rotation, bool mirror, bool automatic, float lower, float upper);
+    void correction(double emissivity, double reflected_celsius, bool corrected);
     std::string open(int borrowed_fd);
     void replay(const std::vector<std::uint8_t>& composite);
     void begin_network();
@@ -85,6 +89,7 @@ private:
     unsigned queue_head_ = 0, queue_tail_ = 0, queue_size_ = 0;
     Frame last_presented_;
     DisplaySettings settings_;
+    p2pro::BandPlanckTable planck_;
     ANativeWindow* desired_window_ = nullptr;
     std::uint64_t window_generation_ = 0;
     std::uint64_t capture_generation_ = 0;

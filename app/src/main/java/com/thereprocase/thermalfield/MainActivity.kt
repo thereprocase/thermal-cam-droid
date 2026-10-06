@@ -21,10 +21,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.TextStyle
@@ -87,7 +90,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
         when {
-            intent.action == android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED -> model.cameraMode()
+            intent.action == android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED -> model.cameraAttached()
             BuildConfig.DEBUG && intent.getStringExtra("network_url") != null -> connectNetwork(intent.getStringExtra("network_url")!!)
             BuildConfig.DEBUG && intent.getBooleanExtra("fixture", false) -> model.fixture()
             else -> model.connect()
@@ -111,6 +114,7 @@ class MainActivity : ComponentActivity() {
             if (event.repeatCount == 0) model.capture(keyCode != KeyEvent.KEYCODE_VOLUME_DOWN)
             return true
         }
+        if (event.repeatCount == 0 && keyCode in listOf(KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_UP)) model.message("Not captured · ${model.captureRefusalReason()}")
         return super.onKeyDown(keyCode, event)
     }
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
@@ -134,11 +138,11 @@ class MainActivity : ComponentActivity() {
     BasicText(text, modifier, style = TextStyle(color = color, fontFamily = if (mono) Mono else Sans, fontSize = size.sp, lineHeight = (size * 1.4).sp))
 }
 
-@Composable private fun Action(text: String, selected: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier, action: () -> Unit) {
+@Composable private fun Action(text: String, selected: Boolean? = null, enabled: Boolean = true, modifier: Modifier = Modifier, action: () -> Unit) {
     Box(modifier.defaultMinSize(minHeight = 48.dp).border(1.dp, if (enabled) Blue else Rule)
-        .background(if (selected) Blue else Color.White).semantics { stateDescription = if (selected) "Selected" else "Not selected" }
+        .background(if (selected == true) Blue else Color.White).semantics { if (selected != null) stateDescription = if (selected) "Selected" else "Not selected" }
         .clickable(enabled = enabled, role = Role.Button, onClick = action).padding(horizontal = 12.dp, vertical = 12.dp)) {
-        Label(text, color = if (!enabled) Rule else if (selected) Color.White else Blue)
+        Label(text, color = if (!enabled) Rule else if (selected == true) Color.White else Blue)
     }
 }
 
@@ -161,6 +165,9 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
     var sourceAddress by remember { mutableStateOf(state.networkUrl) }
     var lowerText by remember { mutableStateOf("") }; var upperText by remember { mutableStateOf("") }
     var spanError by remember { mutableStateOf("") }
+    var correctionDialog by remember { mutableStateOf(false) }
+    var emissivityText by remember { mutableStateOf("") }; var reflectedText by remember { mutableStateOf("") }
+    var correctionError by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().background(Gray).safeDrawingPadding()) {
         Row(Modifier.fillMaxWidth().background(Blue).padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Label("THERMAL FIELD", color = Color.White, mono = true, size = 18)
@@ -177,13 +184,27 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val ratio = if ((state.rotation + if (state.flip) 2 else 0) % 2 == 0) 4f / 3f else 3f / 4f
                 val height = minOf(maxWidth / ratio, 360.dp)
+                Box(Modifier.fillMaxWidth().height(height)) {
                 AndroidView(factory = { context -> SurfaceView(context).apply {
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(holder: SurfaceHolder) { model.surface(holder.surface); surfaceCreated() }
                         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) { model.surface(holder.surface) }
                         override fun surfaceDestroyed(holder: SurfaceHolder) { model.surface(null) }
                     })
-                } }, modifier = Modifier.fillMaxWidth().height(height))
+                } }, modifier = Modifier.matchParentSize())
+                if ((!state.connected && !state.fixture) || state.frame.frame == 0L || state.frame.error.isNotEmpty()) {
+                    Box(Modifier.matchParentSize().background(Light), contentAlignment = Alignment.Center) {
+                        Label(if (state.busy) "CONNECTING" else "NO SIGNAL", mono = true, size = 18)
+                    }
+                } else if (state.busy || state.frame.ageMs > 300 || state.frame.unchangedMs > 300 && !state.fixture) {
+                    val badge = when {
+                        state.busy -> state.status
+                        state.frame.ageMs > 300 -> "FRAME STALLED · LAST IMAGE"
+                        else -> "LIVE TRANSPORT · DATA UNCHANGED"
+                    }
+                    Label(badge, Modifier.align(Alignment.TopCenter).background(Color(0xfffff4dc)).padding(8.dp), mono = true, size = 12)
+                }
+                }
                 }
                 val visible = state.frame.frame > 0
                 Row(Modifier.fillMaxWidth().background(Light).padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -199,7 +220,7 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
                     Label(if (state.automatic) "AUTO SCALE" else "LOCKED SCALE", mono = true)
                     Label(if (visible || !state.automatic) temperature(upper, state.fahrenheit) else "—", mono = true)
                 }
-                Label(if (state.fixture) "Synthetic data · not a camera measurement" else "Apparent temperatures · comparison validation pending",
+                Label(if (state.fixture) "Synthetic data · not a camera measurement" else if (state.corrected) "Corrected ε ${String.format(Locale.US, "%.3f", state.emissivity)} · reflected ${temperature(state.reflectedCelsius, state.fahrenheit)} · baseline/accuracy validation pending" else "Apparent temperatures · emissivity not applied · comparison validation pending",
                     Modifier.fillMaxWidth().background(Color(0xfffff4dc)).padding(12.dp))
             }
             Pane("DISPLAY") {
@@ -212,15 +233,32 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
                 }
                 Row(Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Action("Auto span", state.automatic, modifier = Modifier.weight(1f)) { model.span(true, state.lower, state.upper) }
-                    Action("Lock current", !state.automatic, enabled = state.frame.frame > 0, modifier = Modifier.weight(1f)) {
+                    Action("Lock current", !state.automatic, enabled = state.frame.frame > 0 && state.frame.minimum.isFinite() && state.frame.maximum.isFinite(), modifier = Modifier.weight(1f)) {
                         model.span(false, state.frame.minimum.toFloat(), maxOf(state.frame.minimum.toFloat() + .1f, state.frame.maximum.toFloat()))
                     }
                 }
                 Action("Set level / span", modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp)) {
                     fun display(value: Float) = if (state.fahrenheit) value * 9 / 5 + 32 else value
-                    lowerText = String.format(Locale.US, "%.1f", display(state.lower)); upperText = String.format(Locale.US, "%.1f", display(state.upper))
+                    lowerText = String.format(Locale.US, "%.1f", display(if (state.automatic && state.frame.minimum.isFinite()) state.frame.minimum.toFloat() else state.lower))
+                    upperText = String.format(Locale.US, "%.1f", display(if (state.automatic && state.frame.maximum.isFinite()) state.frame.maximum.toFloat() else state.upper))
                     spanError = ""; spanDialog = true; model.editing(true)
                 }
+            }
+            Pane("RADIOMETRIC CORRECTION") {
+                Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Action("Apparent", !state.corrected, enabled = !state.correctionApplying, modifier = Modifier.weight(1f)) { model.correction(state.emissivity, state.reflectedCelsius, false) }
+                    Action("Corrected", state.corrected, enabled = !state.correctionApplying, modifier = Modifier.weight(1f)) { model.correction(state.emissivity, state.reflectedCelsius, true) }
+                }
+                if (state.correctionApplying) Label("Applying correction inputs…", Modifier.padding(12.dp), mono = true)
+                if (state.correctionError.isNotEmpty()) Label(state.correctionError, Modifier.padding(12.dp), color = Color(0xffb3261e))
+                Label("ε ${String.format(Locale.US, "%.3f", state.emissivity)} · reflected ${temperature(state.reflectedCelsius, state.fahrenheit)}", Modifier.padding(horizontal = 12.dp), mono = true)
+                Action("Set emissivity / reflected T", modifier = Modifier.padding(12.dp)) {
+                    emissivityText = String.format(Locale.US, "%.3f", state.emissivity)
+                    reflectedText = String.format(Locale.US, "%.1f", if (state.fahrenheit) state.reflectedCelsius * 9 / 5 + 32 else state.reflectedCelsius)
+                    correctionError = ""; correctionDialog = true; model.editing(true)
+                }
+                Label("8–14 µm graybody · flat response · short-range transmission assumed 1. Magenta = invalid radiance solution. Reflected temperature is an input, not a sensor reading.", Modifier.padding(12.dp), size = 12)
+                if (state.frame.invalidPixels > 0) Label("${state.frame.invalidPixels} invalid pixels excluded from extrema", Modifier.padding(12.dp), color = Color(0xffb3261e))
             }
             Pane("CAMERA") {
                 Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -234,7 +272,6 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
                     Action("Demo", enabled = !state.busy, modifier = Modifier.weight(1f)) { model.fixture() }
                     if (BuildConfig.DEBUG) Action("Debug frame dump", enabled = state.frame.frame > 0, modifier = Modifier.weight(1f)) { model.dumpFrame() }
                 }
-                if (state.captureMessage.isNotEmpty()) Label(state.captureMessage, Modifier.padding(12.dp), mono = true)
                 if (state.firmware.isNotEmpty()) Label("Firmware ${state.firmware}", Modifier.padding(12.dp), mono = true)
             }
             Pane("PERFORMANCE / DIAGNOSTIC") {
@@ -246,9 +283,10 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
         Column(Modifier.fillMaxWidth().border(1.dp, Rule).background(Gray).padding(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Action(if (state.saving) "Saving…" else "Capture", enabled = model.canCapture(), modifier = Modifier.weight(1f)) { model.capture() }
-                Action("Raw", enabled = model.canCapture(), modifier = Modifier.weight(1f)) { model.capture(true) }
-                Action("Share last", enabled = state.lastCapture != null && !state.saving, modifier = Modifier.weight(1f)) { sharing = true }
+                Action("Save raw", enabled = model.canCapture(), modifier = Modifier.weight(1f)) { model.capture(true) }
+                Action(if (state.lastCapture?.rawPreferred == true) "Share raw…" else "Share…", enabled = state.lastCapture != null && !state.saving, modifier = Modifier.weight(1f)) { sharing = true }
             }
+            if (state.captureMessage.isNotEmpty()) Label(state.captureMessage, Modifier.padding(top = 6.dp), mono = true, size = 12)
             Label("Volume ↓ view · Volume ↑ / X raw", Modifier.padding(top = 4.dp), mono = true, size = 12)
         }
         val status = when {
@@ -264,8 +302,10 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
         Pane("SHARE CAPTURE") {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Label("Annotated view, lossless radiometric plane, or the complete three-file capture.")
-                Action("Annotated image") { sharing = false; share(state.lastCapture, "image") }
-                Action("16-bit radiometric plane") { sharing = false; share(state.lastCapture, "raw") }
+                val preferred = if (state.lastCapture.rawPreferred) listOf("raw", "image") else listOf("image", "raw")
+                preferred.forEachIndexed { index, kind ->
+                    Action("${if (kind == "raw") "16-bit radiometric plane" else "Annotated image"}${if (index == 0) " (preferred)" else ""}") { sharing = false; share(state.lastCapture, kind) }
+                }
                 Action("Image + plane + JSON") { sharing = false; share(state.lastCapture, "all") }
             }
         }
@@ -282,13 +322,31 @@ private fun temperature(value: Double, fahrenheit: Boolean): String {
             }
         }
     }
+    if (correctionDialog) Dialog(onDismissRequest = { correctionDialog = false; model.editing(false) }) {
+        Pane("EMISSIVITY / REFLECTED TEMPERATURE") {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Label("Emissivity (greater than 0, at most 1)")
+                BasicTextField(emissivityText, { emissivityText = it }, Modifier.fillMaxWidth().border(1.dp, Rule).background(Color.White).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                Label("Reflected apparent temperature ${if (state.fahrenheit) "°F" else "°C"}")
+                BasicTextField(reflectedText, { reflectedText = it }, Modifier.fillMaxWidth().border(1.dp, Rule).background(Color.White).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                if (correctionError.isNotEmpty()) Label(correctionError, color = Color(0xffb3261e))
+                Action("Apply inputs") {
+                    val epsilon = emissivityText.toDoubleOrNull()
+                    val reflected = reflectedText.toDoubleOrNull()?.let { if (state.fahrenheit) (it - 32) * 5 / 9 else it }
+                    if (epsilon == null || !epsilon.isFinite() || epsilon <= 0 || epsilon > 1 || reflected == null || !reflected.isFinite() || reflected <= -273.15 || reflected > 826.85) correctionError = "Enter valid emissivity and reflected temperature within the model domain (0–1100 K)."
+                    else { model.correction(epsilon, reflected, state.corrected); correctionDialog = false; model.editing(false) }
+                }
+                Label("The default 20 °C reflected input has not been measured. Choose a value appropriate to the scene. Raw mode preserves the camera-apparent temperatures.", size = 12)
+            }
+        }
+    }
     if (spanDialog) Dialog(onDismissRequest = { spanDialog = false; model.editing(false) }) {
         Pane("LOCKED LEVEL / SPAN") {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Label("Lower ${if (state.fahrenheit) "°F" else "°C"}")
-                BasicTextField(lowerText, { lowerText = it }, Modifier.fillMaxWidth().border(1.dp, Rule).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp))
+                BasicTextField(lowerText, { lowerText = it }, Modifier.fillMaxWidth().border(1.dp, Rule).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
                 Label("Upper ${if (state.fahrenheit) "°F" else "°C"}")
-                BasicTextField(upperText, { upperText = it }, Modifier.fillMaxWidth().border(1.dp, Rule).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp))
+                BasicTextField(upperText, { upperText = it }, Modifier.fillMaxWidth().border(1.dp, Rule).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
                 if (spanError.isNotEmpty()) Label(spanError, color = Color(0xffb3261e))
                 Action("Apply locked range") {
                     var lower = lowerText.toFloatOrNull(); var upper = upperText.toFloatOrNull()

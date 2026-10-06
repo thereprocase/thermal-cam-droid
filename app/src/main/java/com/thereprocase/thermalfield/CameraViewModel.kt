@@ -35,9 +35,11 @@ data class FrameTelemetry(
     val center: Double = 0.0, val received: Long = 0, val rendered: Long = 0,
     val malformed: Long = 0, val overflow: Long = 0, val fps: Double = 0.0,
     val sourceSequenceGaps: Long = 0,
+    val invalidPixels: Int = 0,
     val ageMs: Double = -1.0, val unchangedMs: Double = -1.0,
     val swapMs: Double = 0.0, val presentationMs: Double = 0.0,
     val presentationSamples: Long = 0, val error: String = "",
+    val emissivity: Double = Double.NaN, val reflectedCelsius: Double = Double.NaN, val corrected: Boolean = false,
 )
 
 data class CameraUiState(
@@ -51,6 +53,8 @@ data class CameraUiState(
     val saving: Boolean = false, val lastCapture: SavedCapture? = null,
     val network: Boolean = false, val networkUrl: String = "", val gainKnown: Boolean = true,
     val editing: Boolean = false,
+    val emissivity: Double = 1.0, val reflectedCelsius: Double = 20.0, val corrected: Boolean = false,
+    val correctionApplying: Boolean = false, val correctionError: String = "",
 )
 
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
@@ -60,6 +64,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val engine = bridge.create()
     private val worker = Executors.newSingleThreadExecutor { task -> Thread(task, "P2UsbCommands") }
     private val captureWorker = Executors.newSingleThreadExecutor { task -> Thread(task, "ThermalCaptureIO") }
+    private val correctionWorker = Executors.newSingleThreadExecutor { task -> Thread(task, "ThermalCorrection") }
+    private val correctionGeneration = AtomicLong(0)
     private val generation = AtomicLong(0)
     private val preferences = context.getSharedPreferences("display", Context.MODE_PRIVATE)
     private val permissionAction = "${context.packageName}.USB_PERMISSION"
@@ -81,6 +87,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         rotation = preferences.getInt("rotation", 0), mirror = preferences.getBoolean("mirror", false),
         networkUrl = preferences.getString("networkUrl", "") ?: "",
         automatic = preferences.getBoolean("automatic", true), lower = preferences.getFloat("lower", 20f), upper = preferences.getFloat("upper", 30f),
+        emissivity = preferences.getFloat("emissivity", 1f).toDouble(), reflectedCelsius = preferences.getFloat("reflectedCelsius", 20f).toDouble(),
+        corrected = preferences.getBoolean("corrected", false),
     ))
     val state = mutableState.asStateFlow()
 
@@ -88,9 +96,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         override fun onReceive(context: Context, intent: Intent) {
             val device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
             when (intent.action) {
-                UsbManager.ACTION_USB_DEVICE_ATTACHED -> if (device?.isP2Pro() == true) cameraMode()
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> if (device?.isP2Pro() == true) cameraAttached()
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    if (device?.deviceName == activeDevice || device?.deviceName == requestedDevice) disconnect("Camera detached")
+                    if (device != null && !networkSelected && !fixtureSelected && (device.deviceName == activeDevice || device.deviceName == requestedDevice)) disconnect("Camera detached")
                 }
                 permissionAction -> {
                     if (intent.getLongExtra("generation", -1) != generation.get() || !started) return
@@ -109,13 +117,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
         }, Context.RECEIVER_NOT_EXPORTED)
         configure()
+        state.value.let { correction(it.emissivity, it.reflectedCelsius, it.corrected) }
         viewModelScope.launch(Dispatchers.Default) {
             while (true) {
                 try {
                     val json = JSONObject(bridge.summary(engine))
                     val frame = FrameTelemetry(
-                        frame = json.getLong("frame"), minimum = json.getDouble("minimum"),
-                        maximum = json.getDouble("maximum"), center = json.getDouble("center"),
+                        frame = json.getLong("frame"), minimum = json.optDouble("minimum", Double.NaN),
+                        maximum = json.optDouble("maximum", Double.NaN), center = json.optDouble("center", Double.NaN),
+                        invalidPixels = json.optInt("invalid_pixels"),
                         received = json.getLong("received"), rendered = json.getLong("rendered"),
                         malformed = json.getLong("malformed"), overflow = json.getLong("overflow"),
                         sourceSequenceGaps = json.optLong("source_sequence_gaps"),
@@ -123,6 +133,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         unchangedMs = json.getDouble("unchanged_ms"), swapMs = json.getDouble("callback_to_swap_ms"),
                         presentationMs = json.getDouble("presentation_latency_ms"),
                         presentationSamples = json.getLong("presentation_samples"), error = json.getString("error"),
+                        emissivity = json.optDouble("emissivity", Double.NaN), reflectedCelsius = json.optDouble("reflected_apparent_celsius", Double.NaN), corrected = json.optBoolean("correction_applied"),
                     )
                     mutableState.update { it.copy(frame = frame) }
                 } catch (error: Exception) { Log.e("ThermalField", "Telemetry read failed", error) }
@@ -225,6 +236,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun cameraMode() { disconnect(); connect() }
+    // Android can deliver both an activity intent and a broadcast for one
+    // attach. connect() preserves an existing open or permission request.
+    fun cameraAttached() { if (networkSelected || fixtureSelected) cameraMode() else connect() }
     fun network(url: String) {
         val address = url.trim()
         try {
@@ -247,7 +261,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     client.frames { bytes, sequence ->
                         if (generation.get() == token && started) {
                             bridge.networkFrame(engine, bytes, sequence)
-                            mutableState.update { it.copy(status = if (commandPending) it.status else "Network live", connected = true, network = true, busy = commandPending) }
+                            if (!state.value.connected || !commandPending && state.value.status != "Network live")
+                                mutableState.update { it.copy(status = if (commandPending) it.status else "Network live", connected = true, network = true, busy = commandPending) }
                         }
                     }
                 } catch (error: Exception) {
@@ -286,6 +301,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         mutableState.update { it.copy(automatic = automatic, lower = lower, upper = upper) }
         preferences.edit().putBoolean("automatic", automatic).putFloat("lower", lower).putFloat("upper", upper).apply(); configure()
     }
+    fun correction(emissivity: Double, reflectedCelsius: Double, corrected: Boolean) {
+        if (!emissivity.isFinite() || emissivity <= 0 || emissivity > 1 || !reflectedCelsius.isFinite() || reflectedCelsius <= -273.15 || reflectedCelsius > 826.85) return
+        val token = correctionGeneration.incrementAndGet()
+        mutableState.update { it.copy(correctionApplying = true, correctionError = "") }
+        correctionWorker.execute {
+            if (closed || token != correctionGeneration.get()) return@execute
+            try {
+                bridge.correction(engine, emissivity, reflectedCelsius, corrected)
+                if (closed || token != correctionGeneration.get()) return@execute
+                mutableState.update { it.copy(emissivity = emissivity, reflectedCelsius = reflectedCelsius, corrected = corrected, correctionApplying = false) }
+                preferences.edit().putFloat("emissivity", emissivity.toFloat()).putFloat("reflectedCelsius", reflectedCelsius.toFloat()).putBoolean("corrected", corrected).apply()
+            } catch (error: Exception) {
+                if (!closed && token == correctionGeneration.get()) mutableState.update { it.copy(correctionApplying = false, correctionError = error.message ?: "Correction could not be applied") }
+            }
+        }
+    }
     fun editing(value: Boolean) { mutableState.update { it.copy(editing = value) } }
     fun message(value: String) { mutableState.update { it.copy(captureMessage = value) } }
     private fun configure() { state.value.let { bridge.configure(engine, it.palette, it.flip, it.rotation, it.mirror, it.automatic, it.lower, it.upper) } }
@@ -309,9 +340,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun canCapture(): Boolean = state.value.let {
-        it.frame.frame > 0 && (it.connected || it.fixture) && !it.busy && !it.saving && !it.editing && it.frame.ageMs in 0.0..500.0 && it.frame.error.isEmpty()
+    fun captureRefusalReason(): String = state.value.let {
+        when {
+            it.frame.frame == 0L -> "No displayed frame yet"
+            !it.connected && !it.fixture -> "Source disconnected"
+            it.frame.error.isNotEmpty() -> "Display error"
+            it.busy -> "Camera command in progress"
+            it.correctionApplying || it.frame.corrected != it.corrected || kotlin.math.abs(it.frame.emissivity - it.emissivity) > 1e-7 || kotlin.math.abs(it.frame.reflectedCelsius - it.reflectedCelsius) > 1e-5 -> "Correction inputs are applying"
+            it.saving -> "Capture is already saving"
+            it.editing -> "Finish editing first"
+            it.frame.ageMs !in 0.0..500.0 -> "Frame is stale"
+            else -> ""
+        }
     }
+    fun canCapture(): Boolean = captureRefusalReason().isEmpty()
 
     fun capture(rawPreferred: Boolean = false) {
         if (!canCapture()) return
@@ -321,7 +363,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 val saved = CaptureStore.save(context, bridge.capture(engine), fahrenheit, rawPreferred)
                 mutableState.update { it.copy(saving = false, lastCapture = saved,
-                    captureMessage = "Saved image, 16-bit plane and JSON · Downloads/ThermalField") }
+                    captureMessage = if (rawPreferred) "Saved plane, image + JSON · raw selected for sharing" else "Saved image, plane + JSON · Downloads/ThermalField") }
             } catch (error: Exception) {
                 mutableState.update { it.copy(saving = false, captureMessage = "Capture failed: ${error.message ?: "Try again"}") }
                 Log.e("ThermalField", "Capture failed", error)
@@ -335,6 +377,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         worker.execute { closeConnection(); bridge.destroy(engine) }
         worker.shutdown()
         captureWorker.shutdown()
+        correctionWorker.shutdown()
         super.onCleared()
     }
 }

@@ -10,6 +10,7 @@
 #include <deque>
 #include <iomanip>
 #include <libusb.h>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include "orientation.hpp"
@@ -30,6 +31,20 @@ std::string quote(const std::string& value) {
 }
 
 namespace {
+std::string number(double value) {
+    if(!std::isfinite(value))return "null";
+    std::ostringstream out;out<<std::setprecision(12)<<value;return out.str();
+}
+std::string correction_metadata(const Frame& frame) {
+    if(!frame.display.correction)return "";
+    const auto& table=*frame.display.correction;
+    std::ostringstream out;out<<std::setprecision(12)
+        <<",\"emissivity\":"<<table.emissivity<<",\"reflected_apparent_celsius\":"<<table.reflected_celsius
+        <<",\"correction_applied\":"<<(table.corrected ? "true":"false")
+        <<",\"correction_model\":\"graybody Planck integral 8-14 um\",\"spectral_response_assumption\":\"flat\""
+        <<",\"atmospheric_transmission_assumed\":1,\"invalid_pixels\":"<<frame.invalid_pixels;
+    return out.str();
+}
 class UsbTransport final : public p2pro::Transport {
 public:
     UsbTransport(libusb_device_handle* handle, std::atomic<bool>& cancelled)
@@ -79,6 +94,7 @@ precision highp usampler2D;
 in vec2 uv;
 out vec4 color;
 uniform usampler2D rawPlane;
+uniform highp sampler2D temperatureTable;
 uniform vec2 limits;
 uniform int palette;
 uniform int rotation;
@@ -104,7 +120,9 @@ void main() {
     else if(rotation==2)q=vec2(1.0)-q;
     else if(rotation==3)q=vec2(1.0-q.y,q.x);
     ivec2 p=clamp(ivec2(q*vec2(256,192)),ivec2(0),ivec2(255,191));
-    float temperature=float(texelFetch(rawPlane,p,0).r)/64.0-273.15;
+    uint raw=texelFetch(rawPlane,p,0).r;
+    float temperature=texelFetch(temperatureTable,ivec2(int(raw&255u),int(raw>>8)),0).r;
+    if(isnan(temperature)||isinf(temperature)) { color=vec4(0.75,0.0,0.75,1.0);return; }
     float t=clamp((temperature-limits.x)/max(limits.y-limits.x,0.015625),0.0,1.0);
     vec3 rgb=ramp(t);
     if (crossAt(p,minPoint)) rgb=vec3(0.0,0.95,1.0);
@@ -146,6 +164,10 @@ public:
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
         glTexStorage2D(GL_TEXTURE_2D,1,GL_R16UI,256,192);
+        glGenTextures(1,&correction_texture_);glBindTexture(GL_TEXTURE_2D,correction_texture_);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+        glTexStorage2D(GL_TEXTURE_2D,1,GL_R32F,256,256);
         eglSwapInterval(display_,1);
         const char* extensions=eglQueryString(display_,EGL_EXTENSIONS);
         if (extensions && std::strstr(extensions,"EGL_ANDROID_get_frame_timestamps")) {
@@ -160,7 +182,7 @@ public:
         if (display_ != EGL_NO_DISPLAY) {
             if (context_ != EGL_NO_CONTEXT) {
                 eglMakeCurrent(display_,surface_,surface_,context_);
-                glDeleteTextures(1,&texture_);glDeleteProgram(program_);glDeleteVertexArrays(1,&vao_);
+                glDeleteTextures(1,&texture_);glDeleteTextures(1,&correction_texture_);glDeleteProgram(program_);glDeleteVertexArrays(1,&vao_);
             }
             eglMakeCurrent(display_,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);
             if (surface_ != EGL_NO_SURFACE) eglDestroySurface(display_,surface_);
@@ -181,8 +203,10 @@ public:
         glPixelStorei(GL_UNPACK_ALIGNMENT,2);
         glTexSubImage2D(GL_TEXTURE_2D,0,0,0,256,192,GL_RED_INTEGER,GL_UNSIGNED_SHORT,frame.plane.data());
         glUniform1i(glGetUniformLocation(program_,"rawPlane"),0);
+        bind_correction(frame);
         float lower=frame.display.automatic ? frame.minimum : frame.display.lower;
         float upper=frame.display.automatic ? frame.maximum : frame.display.upper;
+        if(!std::isfinite(lower)||!std::isfinite(upper)){lower=0;upper=1;}
         glUniform2f(glGetUniformLocation(program_,"limits"),lower,upper);
         glUniform1i(glGetUniformLocation(program_,"palette"),frame.display.palette);
         glUniform1i(glGetUniformLocation(program_,"rotation"),rotation);
@@ -213,8 +237,11 @@ public:
         glViewport(0,0,width,height);glUseProgram(program_);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,texture_);
         glTexSubImage2D(GL_TEXTURE_2D,0,0,0,256,192,GL_RED_INTEGER,GL_UNSIGNED_SHORT,frame.plane.data());
         glUniform1i(glGetUniformLocation(program_,"rawPlane"),0);
-        glUniform2f(glGetUniformLocation(program_,"limits"),frame.display.automatic ? frame.minimum:frame.display.lower,
-                   frame.display.automatic ? frame.maximum:frame.display.upper);
+        bind_correction(frame);
+        double lower=frame.display.automatic ? frame.minimum:frame.display.lower;
+        double upper=frame.display.automatic ? frame.maximum:frame.display.upper;
+        if(!std::isfinite(lower)||!std::isfinite(upper)){lower=0;upper=1;}
+        glUniform2f(glGetUniformLocation(program_,"limits"),lower,upper);
         glUniform1i(glGetUniformLocation(program_,"palette"),frame.display.palette);
         glUniform1i(glGetUniformLocation(program_,"rotation"),rotation);
         glUniform1i(glGetUniformLocation(program_,"mirrored"),frame.display.mirror);
@@ -240,16 +267,31 @@ public:
         return result;
     }
 private:
+    void bind_correction(const Frame& frame) {
+        glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,correction_texture_);
+        // A frame retains its immutable table, including while capture runs
+        // after the user changes inputs. Display and statistics share the LUT.
+        if(correction_owner_!=frame.display.correction) {
+            glTexSubImage2D(GL_TEXTURE_2D,0,0,0,256,256,GL_RED,GL_FLOAT,frame.display.correction->temperature.data());
+            correction_owner_=frame.display.correction;
+        }
+        glUniform1i(glGetUniformLocation(program_,"temperatureTable"),1);
+        glActiveTexture(GL_TEXTURE0);
+    }
     ANativeWindow* window_;
     EGLDisplay display_=EGL_NO_DISPLAY;EGLContext context_=EGL_NO_CONTEXT;EGLSurface surface_=EGL_NO_SURFACE;
-    GLuint texture_=0,program_=0,vao_=0;
+    GLuint texture_=0,correction_texture_=0,program_=0,vao_=0;
+    std::shared_ptr<const p2pro::CorrectionTable> correction_owner_;
     PFNEGLGETNEXTFRAMEIDANDROIDPROC next_frame_=nullptr;
     PFNEGLGETFRAMETIMESTAMPSANDROIDPROC timestamps_=nullptr;
     std::deque<Presentation> pending_;
 };
 } // namespace
 
-Engine::Engine() {render_thread_=std::thread(&Engine::render_loop,this);}
+Engine::Engine() {
+    settings_.correction=std::make_shared<p2pro::CorrectionTable>(planck_,1.0,20.0,false);
+    render_thread_=std::thread(&Engine::render_loop,this);
+}
 Engine::~Engine() {
     stop();quitting_=true;condition_.notify_all();render_thread_.join();
     if (desired_window_) ANativeWindow_release(desired_window_);
@@ -261,7 +303,15 @@ void Engine::set_surface(ANativeWindow* window) {
 }
 void Engine::configure(int palette,bool flip,int rotation,bool mirror,bool automatic,float lower,float upper) {
     if (palette<0 || palette>2 || rotation<0 || rotation>3 || !std::isfinite(lower) || !std::isfinite(upper) || upper<=lower) throw std::invalid_argument("Invalid display settings");
-    std::lock_guard<std::mutex> lock(mutex_);settings_={palette,flip,rotation,mirror,automatic,lower,upper};
+    std::lock_guard<std::mutex> lock(mutex_);
+    settings_.palette=palette;settings_.flip=flip;settings_.rotation=rotation;settings_.mirror=mirror;
+    settings_.automatic=automatic;settings_.lower=lower;settings_.upper=upper;
+}
+void Engine::correction(double emissivity,double reflected,bool corrected) {
+    // Table integration/inversion runs on the command worker, outside the
+    // capture lock. Each subsequently received frame snapshots the result.
+    auto table=std::make_shared<p2pro::CorrectionTable>(planck_,emissivity,reflected,corrected);
+    std::lock_guard<std::mutex> lock(mutex_);settings_.correction=std::move(table);
 }
 void Engine::cancel() {cancelled_=true;condition_.notify_all();}
 void Engine::close_session() {
@@ -280,7 +330,7 @@ void Engine::reset_frames(bool fixture) {
     }
     queue_tail_=queue_head_;
     last_presented_=Frame{};
-    fixture_=fixture;network_=false;error_.clear();identity_="{}";gain_mode_=1;command_active_=false;
+    fixture_=fixture;network_=false;error_.clear();identity_="{}";gain_mode_=fixture ? -1:1;command_active_=false;
     received_=rendered_=malformed_=overflow_=0;first_callback_ns_=last_callback_ns_=last_change_ns_=0;
     source_sequence_gaps_=0;source_sequence_seen_=false;
     swap_latency_ms_=max_swap_latency_ms_=presentation_latency_ms_=0;presentation_samples_=0;
@@ -321,7 +371,7 @@ void Engine::replay(const std::vector<std::uint8_t>& bytes) {
     if (bytes.size()!=CompositeBytes) throw std::invalid_argument("Fixture must be a complete composite frame");
     std::lock_guard<std::mutex> operation(operation_mutex_);close_session();cancelled_=false;
     reset_frames(true);
-    {std::lock_guard<std::mutex> lock(mutex_);identity_="{\"source\":\"captured fixture replay\"}";}
+    {std::lock_guard<std::mutex> lock(mutex_);identity_="{\"source\":\"synthetic fixture replay\"}";}
     replay_thread_=std::thread([this,bytes] {
         auto deadline=std::chrono::steady_clock::now();
         while(!cancelled_) {ingest(bytes.data(),bytes.size(),512);deadline+=std::chrono::milliseconds(40);std::this_thread::sleep_until(deadline);}
@@ -372,14 +422,18 @@ void Engine::ingest(const std::uint8_t* bytes,std::size_t length,std::size_t str
     frame.gain=gain_mode_;frame.command_active=command_active_;
     for(unsigned y=0;y<384;++y)std::memcpy(frame.composite.data()+y*512,bytes+y*stride,512);
     std::uint64_t hash=14695981039346656037ULL;
-    std::uint16_t minimum=65535,maximum=0;frame.min_index=frame.max_index=0;
+    double minimum=std::numeric_limits<double>::infinity(),maximum=-minimum;
+    frame.min_index=frame.max_index=0;frame.invalid_pixels=0;
     for(unsigned i=0;i<PixelCount;++i) {
         auto offset=98304+i*2;auto raw=std::uint16_t(frame.composite[offset])|std::uint16_t(frame.composite[offset+1]<<8);
         frame.plane[i]=raw;hash^=raw;hash*=1099511628211ULL;
-        if(raw<minimum){minimum=raw;frame.min_index=i;}if(raw>maximum){maximum=raw;frame.max_index=i;}
+        const double value=frame.display.correction->temperature[raw];
+        if(!std::isfinite(value)){++frame.invalid_pixels;continue;}
+        if(value<minimum){minimum=value;frame.min_index=i;}if(value>maximum){maximum=value;frame.max_index=i;}
     }
     if(hash!=last_hash_ || !last_change_ns_){last_hash_=hash;last_change_ns_=stamp;}
-    frame.minimum=p2pro::celsius(minimum);frame.maximum=p2pro::celsius(maximum);frame.center=p2pro::celsius(frame.plane[96*256+128]);
+    frame.minimum=minimum;frame.maximum=maximum;
+    frame.center=frame.display.correction->temperature[frame.plane[96*256+128]];
     occupied_[slot]=true;queue_[queue_tail_]=slot;queue_tail_=(queue_tail_+1)%4;++queue_size_;condition_.notify_all();
 }
 
@@ -459,8 +513,8 @@ std::string Engine::summary() {
     std::lock_guard<std::mutex> lock(mutex_);const auto now=monotonic_ns();
     double elapsed=(last_callback_ns_-first_callback_ns_)/1e9;
     std::ostringstream out;out<<std::setprecision(12)<<"{\"frame\":"<<last_presented_.sequence
-        <<",\"source\":"<<quote(fixture_ ? "fixture" : network_ ? "network":"camera")<<",\"minimum\":"<<last_presented_.minimum
-        <<",\"maximum\":"<<last_presented_.maximum<<",\"center\":"<<last_presented_.center
+        <<",\"source\":"<<quote(fixture_ ? "fixture" : network_ ? "network":"camera")<<",\"minimum\":"<<number(last_presented_.minimum)
+        <<",\"maximum\":"<<number(last_presented_.maximum)<<",\"center\":"<<number(last_presented_.center)
         <<",\"received\":"<<received_<<",\"rendered\":"<<rendered_<<",\"malformed\":"<<malformed_<<",\"overflow\":"<<overflow_
         <<",\"source_sequence_gaps\":"<<source_sequence_gaps_
         <<",\"fps\":"<<(elapsed>0 ? (received_-1)/elapsed : 0)<<",\"frame_age_ms\":"<<(last_callback_ns_ ? (now-last_callback_ns_)/1e6 : -1)
@@ -469,6 +523,7 @@ std::string Engine::summary() {
         <<",\"presentation_latency_ms\":"<<presentation_latency_ms_<<",\"presentation_samples\":"<<presentation_samples_
         <<",\"rotation_degrees\":"<<((last_presented_.display.rotation+(last_presented_.display.flip ? 2:0))%4)*90
         <<",\"mirrored\":"<<(last_presented_.display.mirror ? "true":"false")
+        <<correction_metadata(last_presented_)
         <<",\"error\":"<<quote(error_)<<",\"identity\":"<<identity_<<'}';return out.str();
 }
 std::vector<std::uint8_t> Engine::dump_frame(){std::lock_guard<std::mutex> lock(mutex_);if(!last_presented_.sequence)throw std::runtime_error("No displayed frame yet");return {last_presented_.composite.begin(),last_presented_.composite.end()};}
@@ -481,12 +536,12 @@ std::vector<std::uint8_t> Engine::snapshot() {
         <<",\"timestamp_unix_ns\":"<<frame.utc_ns<<",\"callback_monotonic_ns\":"<<frame.callback_ns
         <<",\"timestamp_basis\":\"receiver callback\",\"source\":"<<quote(frame.fixture ? "fixture":frame.network ? "network":"camera")
         <<",\"width\":256,\"composite_height\":384,\"plane_height\":192,\"stride\":512,\"format\":\"YUYV\""
-        <<",\"minimum_celsius\":"<<frame.minimum<<",\"maximum_celsius\":"<<frame.maximum<<",\"center_celsius\":"<<frame.center
+        <<",\"minimum_celsius\":"<<number(frame.minimum)<<",\"maximum_celsius\":"<<number(frame.maximum)<<",\"center_celsius\":"<<number(frame.center)
         <<",\"palette\":"<<frame.display.palette<<",\"automatic_span\":"<<(frame.display.automatic ? "true":"false")
-        <<",\"lower_celsius\":"<<(frame.display.automatic ? frame.minimum:frame.display.lower)
-        <<",\"upper_celsius\":"<<(frame.display.automatic ? frame.maximum:frame.display.upper)
+        <<",\"lower_celsius\":"<<number(frame.display.automatic ? frame.minimum:frame.display.lower)
+        <<",\"upper_celsius\":"<<number(frame.display.automatic ? frame.maximum:frame.display.upper)
         <<",\"rotation_degrees\":"<<((frame.display.rotation+(frame.display.flip ? 2:0))%4)*90
-        <<",\"mirrored\":"<<(frame.display.mirror ? "true":"false")<<",\"identity\":"<<identity_<<'}';
+        <<",\"mirrored\":"<<(frame.display.mirror ? "true":"false")<<correction_metadata(frame)<<",\"identity\":"<<identity_<<'}';
     const std::string metadata=json.str();const std::uint32_t size=metadata.size();
     std::vector<std::uint8_t> result;result.reserve(4+size+CompositeBytes);
     for(int shift : {24,16,8,0})result.push_back(static_cast<std::uint8_t>(size>>shift));
@@ -520,18 +575,18 @@ std::vector<std::uint8_t> Engine::capture() {
         <<",\"timestamp_unix_ns\":"<<frame.utc_ns<<",\"callback_monotonic_ns\":"<<frame.callback_ns
         <<",\"timestamp_basis\":\"receiver callback\",\"source\":"<<quote(frame.fixture ? "fixture":frame.network ? "network":"camera")
         <<",\"rendered_width\":"<<width<<",\"rendered_height\":"<<height
-        <<",\"minimum_celsius\":"<<frame.minimum<<",\"maximum_celsius\":"<<frame.maximum<<",\"center_celsius\":"<<frame.center
+        <<",\"minimum_celsius\":"<<number(frame.minimum)<<",\"maximum_celsius\":"<<number(frame.maximum)<<",\"center_celsius\":"<<number(frame.center)
         <<",\"min_display\":["<<minimum.x<<','<<minimum.y<<"],\"max_display\":["<<maximum.x<<','<<maximum.y
         <<"],\"center_display\":["<<center.x<<','<<center.y<<']'
         <<",\"palette\":"<<quote(frame.display.palette==0 ? "ironbow":frame.display.palette==1 ? "white_hot":"rainbow")
         <<",\"automatic_span\":"<<(frame.display.automatic ? "true":"false")
-        <<",\"lower_celsius\":"<<(frame.display.automatic ? frame.minimum:frame.display.lower)
-        <<",\"upper_celsius\":"<<(frame.display.automatic ? frame.maximum:frame.display.upper)
+        <<",\"lower_celsius\":"<<number(frame.display.automatic ? frame.minimum:frame.display.lower)
+        <<",\"upper_celsius\":"<<number(frame.display.automatic ? frame.maximum:frame.display.upper)
         <<",\"rotation_degrees\":"<<rotation*90<<",\"mirrored\":"<<(frame.display.mirror ? "true":"false")
         <<",\"gain_mode\":"<<quote(frame.gain<0 ? "unknown":frame.gain==0 ? "low":"high")
         <<",\"command_active\":"<<(frame.command_active ? "true":"false")
         <<",\"frame_age_at_snapshot_ms\":"<<(monotonic_ns()-frame.callback_ns)/1e6
-        <<",\"emissivity\":1,\"reflected_apparent_celsius\":20,\"correction_applied\":false,\"identity\":"<<request->identity<<'}';
+        <<correction_metadata(frame)<<",\"identity\":"<<request->identity<<'}';
     const std::string metadata=json.str();const std::uint32_t size=metadata.size();
     std::vector<std::uint8_t> result;result.reserve(4+size+CompositeBytes+request->rgba.size());
     for(int shift : {24,16,8,0})result.push_back(static_cast<std::uint8_t>(size>>shift));

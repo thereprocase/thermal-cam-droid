@@ -14,6 +14,9 @@ std::shared_ptr<thermal::Engine> engine(jlong id) {
 void fail(JNIEnv* env,const std::exception& error){env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),error.what());}
 }
 #define JNI_METHOD(name) Java_com_thereprocase_thermalfield_NativeBridge_##name
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(correction)(JNIEnv* env,jobject,jlong id,jdouble emissivity,jdouble reflected,jboolean corrected) {
+    try{engine(id)->correction(emissivity,reflected,corrected);}catch(const std::exception& e){fail(env,e);}
+}
 extern "C" JNIEXPORT jlong JNICALL JNI_METHOD(create)(JNIEnv* env,jobject) {
     try{auto value=std::make_shared<thermal::Engine>();std::lock_guard<std::mutex> lock(registry_mutex);auto id=next_id++;registry.emplace(id,value);return id;}catch(const std::exception& e){fail(env,e);return 0;}
 }

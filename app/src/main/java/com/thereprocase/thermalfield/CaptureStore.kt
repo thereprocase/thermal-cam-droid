@@ -7,6 +7,8 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.LinearGradient
+import android.graphics.Shader
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
@@ -14,6 +16,8 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import org.json.JSONObject
 
@@ -83,7 +87,7 @@ internal object CaptureStore {
         }
         val source = Bitmap.createBitmap(colors, width, height, Bitmap.Config.ARGB_8888)
         val scale = 4
-        val bitmap = Bitmap.createBitmap(width * scale, height * scale + 156, Bitmap.Config.ARGB_8888)
+        val bitmap = Bitmap.createBitmap(width * scale, height * scale + 264, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.drawColor(Color.WHITE)
         canvas.drawBitmap(source, null, android.graphics.Rect(0, 0, width * scale, height * scale), Paint())
@@ -91,12 +95,12 @@ internal object CaptureStore {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = context.resources.getFont(R.font.plex_mono_regular); textSize = 22f
         }
-        fun temperature(value: Double): String = String.format(Locale.US, "%.1f °%s",
+        fun temperature(value: Double): String = if (!value.isFinite()) "—" else String.format(Locale.US, "%.1f °%s",
             if (fahrenheit) value * 9 / 5 + 32 else value, if (fahrenheit) "F" else "C")
         for ((label, position, key) in listOf(Triple("MIN", "min_display", "minimum_celsius"),
             Triple("MAX", "max_display", "maximum_celsius"), Triple("C", "center_display", "center_celsius"))) {
             val point = metadata.getJSONArray(position)
-            val text = "$label ${temperature(metadata.getDouble(key))}"
+            val text = "$label ${temperature(metadata.optDouble(key, Double.NaN))}"
             val x = (point.getDouble(0).toFloat() * width * scale + 12).coerceIn(8f, bitmap.width - paint.measureText(text) - 8)
             val y = (point.getDouble(1).toFloat() * height * scale - 12).coerceIn(28f, height * scale - 12f)
             paint.color = Color.argb(205, 0, 0, 0)
@@ -105,11 +109,31 @@ internal object CaptureStore {
         }
         paint.color = Color.rgb(16, 16, 16)
         val row = height * scale + 34f
-        canvas.drawText("MIN ${temperature(metadata.getDouble("minimum_celsius"))}   C ${temperature(metadata.getDouble("center_celsius"))}   MAX ${temperature(metadata.getDouble("maximum_celsius"))}", 16f, row, paint)
-        canvas.drawText("${if (metadata.getBoolean("automatic_span")) "AUTO" else "LOCKED"}  ${temperature(metadata.getDouble("lower_celsius"))} — ${temperature(metadata.getDouble("upper_celsius"))}", 16f, row + 34, paint)
-        canvas.drawText("Apparent temperature · ${metadata.getString("palette")}", 16f, row + 68, paint)
+        for ((index, item) in listOf("MIN" to "minimum_celsius", "C" to "center_celsius", "MAX" to "maximum_celsius").withIndex())
+            canvas.drawText("${item.first} ${temperature(metadata.optDouble(item.second, Double.NaN))}", 16f + index * (bitmap.width - 32f) / 3, row, paint)
+        val paletteColors = when (metadata.getString("palette")) {
+            "white_hot" -> intArrayOf(Color.BLACK, Color.WHITE)
+            "rainbow" -> intArrayOf(0xff000064.toInt(), 0xff005aff.toInt(), 0xff00dcb4.toInt(), 0xffbeff00.toInt(), 0xffff8c00.toInt(), 0xffb40000.toInt())
+            else -> intArrayOf(Color.BLACK, 0xff2d0050.toInt(), 0xffaa1946.toInt(), 0xfff56e0f.toInt(), 0xffffdc46.toInt(), Color.WHITE)
+        }
+        paint.shader = LinearGradient(16f, 0f, bitmap.width - 16f, 0f, paletteColors, null, Shader.TileMode.CLAMP)
+        canvas.drawRect(16f, row + 14, bitmap.width - 16f, row + 34, paint); paint.shader = null
+        canvas.drawText("${if (metadata.getBoolean("automatic_span")) "AUTO" else "LOCKED"}  ${temperature(metadata.optDouble("lower_celsius", Double.NaN))} — ${temperature(metadata.optDouble("upper_celsius", Double.NaN))}", 16f, row + 62, paint)
+        canvas.drawText("${if (metadata.optBoolean("correction_applied")) "Corrected ε ${String.format(Locale.US, "%.3f", metadata.getDouble("emissivity"))} R ${temperature(metadata.getDouble("reflected_apparent_celsius"))}" else "Apparent temperature"} · ${metadata.getString("palette")}", 16f, row + 96, paint)
+        val demo = metadata.getString("source") == "fixture"
+        paint.color = if (demo) Color.rgb(255, 244, 220) else Color.rgb(232, 232, 232)
+        canvas.drawRect(0f, row + 112, bitmap.width.toFloat(), row + 144, paint)
+        paint.color = Color.rgb(16, 16, 16); paint.textSize = 20f
+        val sourceLabel = when (metadata.getString("source")) { "fixture" -> "SYNTHETIC DEMO — NOT A MEASUREMENT"; "camera" -> "SOURCE USB"; "network" -> "SOURCE NETWORK BRIDGE"; else -> "SOURCE UNKNOWN" }
+        canvas.drawText(sourceLabel, 16f, row + 135, paint)
         paint.textSize = 16f
-        canvas.drawText(Instant.ofEpochSecond(metadata.getLong("timestamp_unix_ns") / 1_000_000_000).toString(), 16f, row + 103, paint)
+        canvas.drawText(if (demo) "Original synthetic scene · temperatures are illustrative" else "Camera baseline and comparison accuracy validation pending", 16f, row + 168, paint)
+        if (metadata.optInt("invalid_pixels") > 0) {
+            paint.color = Color.rgb(191, 0, 191); canvas.drawRect(16f, row + 180, 32f, row + 196, paint)
+            paint.color = Color.BLACK; canvas.drawText("Invalid radiance solution", 40f, row + 194, paint)
+        }
+        val time = Instant.ofEpochSecond(metadata.getLong("timestamp_unix_ns") / 1_000_000_000).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss XXX"))
+        canvas.drawText(time, 16f, row + 221, paint)
         val output = ByteArrayOutputStream()
         check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "PNG encoding failed" }
         bitmap.recycle()
