@@ -227,8 +227,16 @@ class ValidationInstrumentation : Instrumentation() {
                 }
                 awaitConnected(first.address)
                 val unchangedDeadline = SystemClock.elapsedRealtime() + 5000
-                while (model.state.value.frame.unchangedMs < 700 && SystemClock.elapsedRealtime() < unchangedDeadline) SystemClock.sleep(20)
-                check(model.state.value.frame.unchangedMs >= 700 && model.state.value.frame.ageMs < 300) { "Repeated content was not distinguished from stalled transport" }
+                var unchanged = model.state.value.frame
+                // Both properties must describe the same telemetry snapshot.
+                // A transient delivery delay need not end the bounded wait.
+                while ((unchanged.unchangedMs < 700 || unchanged.ageMs >= 300) && SystemClock.elapsedRealtime() < unchangedDeadline) {
+                    SystemClock.sleep(20)
+                    unchanged = model.state.value.frame
+                }
+                check(unchanged.unchangedMs >= 700 && unchanged.ageMs < 300) {
+                    "Repeated content was not distinguished from stalled transport: unchanged_ms=${unchanged.unchangedMs}, age_ms=${unchanged.ageMs}, received=${unchanged.received}"
+                }
                 first.paused.set(true)
                 val stallDeadline = SystemClock.elapsedRealtime() + 5000
                 while (model.state.value.frame.ageMs < 700 && SystemClock.elapsedRealtime() < stallDeadline) SystemClock.sleep(20)

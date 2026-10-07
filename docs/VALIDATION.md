@@ -2,6 +2,16 @@
 
 Observed results are scoped to the stated run. An absence of errors during one run is not a guarantee for other devices or sessions. Hardware logs and identifying screenshots are retained privately rather than published.
 
+## Android emulator validation
+
+- Created a dedicated Android 16/API 36 default x86_64 AVD, using Emulator 37.2.12, host KVM and SwiftShader. The initial sandboxed software CPU boot crashed; host KVM boot completed. This is an environment observation, not a claim about software emulation on other hosts.
+- Added an opt-in, separately packaged x86_64 debug build. Default builds retain arm64 only; emulator release variants are disabled. An explicit emulator `assembleRelease` request was rejected with the intended configuration error. Both debug APKs built, and the inspected emulator APK contained only x86_64 native libraries.
+- The first emulator integration run crashed because the GLES producer selected RGBX (`0x2`) while the ImageReader expected RGBA (`0x1`). Requiring eight alpha bits in EGL configuration resolved that observed mismatch. The subsequent emulator runner passed saved-frame rendering/provenance, lossless export/reopening, publication failure cleanup, synthetic freshness/stall recovery and queued-control cancellation.
+- The visible UI checker passed full-screen entry, Back exit, button exit, +90° rotation, mirroring, 180° flip, reflected-temperature sign change and the Demo source label after Home/return. A screenshot was inspected privately to confirm the synthetic thermal viewport, crosshairs, readings and palette legend were visible. The source-label assertion after return does not itself establish frame freshness.
+- An initial UI attempt encountered Android's “System UI isn't responding” dialog during emulator startup; selecting Wait allowed subsequent checks. Another attempt encountered the first-use immersive-mode explanation, which the checker now dismisses explicitly. The checker scrolls using the accessibility pane bounds and restores the starting orientation after a successful run.
+- The arm64 Android build/JVM checks and all four host native suites passed after the EGL change. Pixel integration failed its repeated-content/fresh-transport assertion once and passed on rerun. The assertion was then changed to wait within the existing deadline for both properties in one telemetry snapshot, with observed values included on failure; the updated Pixel runner passed. No cause for the first failed observation has been established.
+- These are development-source checks after published 0.1.2. Emulator results do not qualify direct USB, shutter operation, Pixel performance or bath accuracy. The physical bench gates remain open. Setup and reproducible commands are in [EMULATOR.md](EMULATOR.md).
+
 ## 2026-10-06: Pixel 9 Pro, development build
 
 - Android API 37, arm64. Direct USB capture previously reached approximately 25 fps, with 1,300+ callbacks and equal received/rendered counts in one sustained sample; no malformed frames, overflow or source sequence gaps were recorded in that sample. Receiver-to-swap was approximately 2–3 ms and available compositor timestamps approximately 15–31 ms. These intervals are not sensor-to-display latency.

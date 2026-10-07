@@ -10,18 +10,28 @@ val releaseSigning = Properties().apply {
     if (settings.isFile) settings.inputStream().use { load(it) }
 }
 
+// Isolate emulator preferences/captures and disable its release variants so
+// normal device/release builds keep the arm64 camera configuration.
+val emulatorValidation = providers.gradleProperty("emulatorValidation").orNull == "true"
+if (emulatorValidation) {
+    require(gradle.startParameter.taskNames.none { it.contains("release", ignoreCase = true) }) {
+        "Emulator validation is available only for debug builds"
+    }
+}
+
 android {
     namespace = "com.thereprocase.thermalfield"
     compileSdk = 37
     ndkVersion = "28.2.13676358"
     defaultConfig {
-        applicationId = providers.gradleProperty("validationApplicationId").orElse("com.thereprocase.thermalfield").get()
+        applicationId = if (emulatorValidation) "com.thereprocase.thermalfield.emulator"
+            else providers.gradleProperty("validationApplicationId").orElse("com.thereprocase.thermalfield").get()
         minSdk = 36
         targetSdk = 37
         versionCode = 4
         versionName = "0.1.3"
         testInstrumentationRunner = "com.thereprocase.thermalfield.ValidationInstrumentation"
-        ndk { abiFilters += "arm64-v8a" }
+        ndk { abiFilters += if (emulatorValidation) "x86_64" else "arm64-v8a" }
         externalNativeBuild {
             cmake {
                 cppFlags += listOf("-std=c++17", "-Wall", "-Wextra")
@@ -51,6 +61,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     packaging { jniLibs { useLegacyPackaging = false } }
+}
+
+androidComponents {
+    beforeVariants(selector().withBuildType("release")) { variant ->
+        if (emulatorValidation) variant.enable = false
+    }
 }
 
 tasks.register("runtimeLicenseInventory") {

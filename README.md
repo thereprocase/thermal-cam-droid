@@ -64,6 +64,18 @@ adb shell am instrument -w com.thereprocase.thermalfield.test/com.thereprocase.t
 
 It creates and removes its own synthetic capture set. Its synthetic firmware/register inputs do not qualify physical camera accuracy.
 
+For UI work without an unlocked phone, use an Android 16/API 36 or newer x86_64 AVD. The isolated emulator build uses package `com.thereprocase.thermalfield.emulator`; it shares the native renderer/decoder, but does not change the arm64 device/release configuration. Release variants are disabled when this option is selected.
+
+```sh
+./gradlew -PemulatorValidation=true :app:assembleDebug :app:assembleDebugAndroidTest
+adb -s emulator-5556 install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s emulator-5556 install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb -s emulator-5556 shell am instrument -w com.thereprocase.thermalfield.emulator.test/com.thereprocase.thermalfield.ValidationInstrumentation
+python3 tools/check_emulator_ui.py --serial emulator-5556
+```
+
+Wait for the AVD to finish booting before installing. Adjust the emulator serial to match `adb devices`. The UI checker uses only the isolated emulator package and synthetic data. It checks full-screen controls, rotation/mirroring, reflected-temperature sign entry and the source label after Home/return. These checks do not establish USB behavior, thermal accuracy or Pixel performance. Rebuild without `-PemulatorValidation=true` before installing on the Pixel; the build output path is shared between configurations.
+
 Add `-e workload true` to the instrumentation command for an optional one-minute synthetic GPU/measurement workload: 16 geometries, band correction, isotherm and a capture during the stream. It uses a 768×576 ImageReader surface, rather than the visible display, and reports its scoped counters/timings. Native debug code is optimized with symbols and assertions retained to exercise the 40 ms frame budget in development builds.
 
 For foreground recovery checks, first connect the unlocked debug app to a healthy desktop bridge, then run:

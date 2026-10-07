@@ -184,8 +184,10 @@ public:
         try {
         display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
         if (!eglInitialize(display_, nullptr, nullptr)) throw std::runtime_error("EGL initialization failed");
+        // ImageReader consumers require RGBA, while an unconstrained alpha
+        // channel allows EGL to select RGBX and change the producer format.
         const EGLint attrs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-                                EGL_RED_SIZE,8,EGL_GREEN_SIZE,8,EGL_BLUE_SIZE,8,EGL_NONE};
+                                EGL_RED_SIZE,8,EGL_GREEN_SIZE,8,EGL_BLUE_SIZE,8,EGL_ALPHA_SIZE,8,EGL_NONE};
         EGLConfig config; EGLint count = 0;
         if (!eglChooseConfig(display_, attrs, &config, 1, &count) || !count) throw std::runtime_error("No ES3 EGL configuration");
         EGLint format=0;eglGetConfigAttrib(display_,config,EGL_NATIVE_VISUAL_ID,&format);
