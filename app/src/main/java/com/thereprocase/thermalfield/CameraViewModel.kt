@@ -34,7 +34,7 @@ data class FrameTelemetry(
     val frame: Long = 0, val minimum: Double = 0.0, val maximum: Double = 0.0,
     val center: Double = 0.0, val received: Long = 0, val rendered: Long = 0,
     val malformed: Long = 0, val overflow: Long = 0, val fps: Double = 0.0,
-    val sourceSequenceGaps: Long = 0,
+    val sourceSequenceGaps: Long = 0, val gainReadback: Int = -1, val commandActive: Boolean = false,
     val invalidPixels: Int = 0,
     val ageMs: Double = -1.0, val unchangedMs: Double = -1.0,
     val swapMs: Double = 0.0, val presentationMs: Double = 0.0,
@@ -114,9 +114,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         palette = preferences.getInt("palette", 0), flip = preferences.getBoolean("flip", false),
         fahrenheit = preferences.getBoolean("fahrenheit", false),
         rotationLocked = preferences.getBoolean("rotationLocked", false),
-        // The native backup contains the compensated angle; retain the
-                // persisted manual offset and apply today's display rotation.
-                rotation = preferences.getInt("rotation", 0), mirror = preferences.getBoolean("mirror", false),
+        rotation = preferences.getInt("rotation", 0), mirror = preferences.getBoolean("mirror", false),
+        highGain = preferences.getBoolean("usbHighGain", true), gainKnown = false,
         networkUrl = preferences.getString("networkUrl", "") ?: "",
         automatic = preferences.getBoolean("automatic", true), lower = preferences.getFloat("lower", 20f), upper = preferences.getFloat("upper", 30f),
         emissivity = preferences.getFloat("emissivity", 1f).toDouble(), reflectedCelsius = preferences.getFloat("reflectedCelsius", 20f).toDouble(),
@@ -167,7 +166,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         invalidPixels = json.optInt("invalid_pixels"),
                         received = json.getLong("received"), rendered = json.getLong("rendered"),
                         malformed = json.getLong("malformed"), overflow = json.getLong("overflow"),
-                        sourceSequenceGaps = json.optLong("source_sequence_gaps"),
+                        sourceSequenceGaps = json.optLong("source_sequence_gaps"), gainReadback = json.getInt("gain_readback"), commandActive = json.getBoolean("command_active"),
                         fps = json.getDouble("fps"), ageMs = json.getDouble("frame_age_ms"),
                         unchangedMs = json.getDouble("unchanged_ms"), swapMs = json.getDouble("callback_to_swap_ms"),
                         presentationMs = json.getDouble("presentation_latency_ms"),
@@ -280,7 +279,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (!started || !surfaceReady) return
         val token = generation.incrementAndGet()
         activeDevice = device.deviceName
-        mutableState.update { it.copy(status = "Opening camera", busy = true) }
+        mutableState.update { it.copy(status = "Opening camera", busy = true, gainKnown = false) }
         worker.execute {
             if (generation.get() != token || !started) return@execute
             try {
@@ -289,11 +288,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 configure()
                 val opened = manager.openDevice(device) ?: error("Android could not open the USB device")
                 connection = opened
-                val identity = JSONObject(bridge.open(engine, opened.fileDescriptor))
+                val selectedHighGain = preferences.getBoolean("usbHighGain", true)
+                val identity = JSONObject(bridge.open(engine, opened.fileDescriptor, selectedHighGain))
                 if (generation.get() != token || !started) { closeConnection(); return@execute }
                 val sourceGeneration = nativeSourceGeneration()
                 updateSession(token) { it.copy(expectedSourceGeneration = sourceGeneration, status = "Live", connected = true, fixture = false, busy = false,
-                    serial = identity.optString("serial"), firmware = identity.optString("firmware"), highGain = true, gainKnown = true, network = false) }
+                    serial = identity.optString("serial"), firmware = identity.optString("firmware"), highGain = selectedHighGain, gainKnown = true, network = false) }
             } catch (error: Exception) {
                 closeConnection()
                 updateSession(token) { it.copy(status = error.message ?: "Camera open failed", busy = false, connected = false) }
@@ -316,7 +316,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         networkFrames?.close()
         val token = generation.incrementAndGet(); requestedDevice = null; activeDevice = null
         bridge.cancel(engine)
-        mutableState.update { it.copy(status = message, connected = false, busy = false, fixture = false, network = false, archive = false) }
+        mutableState.update { it.copy(status = message, connected = false, busy = false, fixture = false, network = false, archive = false, gainKnown = false) }
         worker.execute {
             closeConnection()
             try { restoreLiveProfile(token) }
@@ -410,10 +410,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (closed || !started || generation.get() != token) return@execute
                 if (requested.network) NetworkFrames.command(requested.networkUrl, if (nuc) "nuc" else "gain", high)
                 else if (nuc) bridge.nuc(engine) else bridge.gain(engine, high)
+                if (!nuc && !requested.network && !closed && started && generation.get() == token) {
+                    if (!preferences.edit().putBoolean("usbHighGain", high).commit())
+                        updateSession(token) { it.copy(captureMessage = "Gain changed, but its preference could not be saved") }
+                }
                 updateSession(token) { it.copy(status = "Live", busy = false,
                     highGain = if (nuc) it.highGain else high, gainKnown = if (nuc) it.gainKnown else true) }
             } catch (error: Exception) {
-                updateSession(token) { it.copy(status = error.message ?: "Command failed", busy = false) }
+                updateSession(token) { it.copy(status = error.message ?: "Command failed", busy = false,
+                    gainKnown = if (!nuc && !requested.network) false else it.gainKnown) }
                 Log.e("ThermalField", "Camera command failed", error)
             } finally { pendingCommandSession.compareAndSet(token, -1) }
         }
@@ -659,7 +664,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             it.frame.error.isNotEmpty() -> "Display error"
             it.profileApplying -> "Survey profile is applying"
             it.expectedSourceGeneration < 0 || it.frame.sourceGeneration != it.expectedSourceGeneration -> "Waiting for this source's first displayed frame"
-            it.busy -> "Camera command in progress"
+            it.busy || it.frame.commandActive -> "Camera command in progress"
+            !it.fixture && !it.archive && !it.network && (!it.gainKnown || it.frame.gainReadback != if (it.highGain) 1 else 0) -> "Waiting for a frame with confirmed gain"
             it.measurementApplying || it.frame.measurementVersion < it.expectedMeasurementVersion -> "Display or measurements are applying"
             it.correctionApplying || it.frame.corrected != it.corrected || kotlin.math.abs(it.frame.emissivity - it.emissivity) > 1e-7 || kotlin.math.abs(it.frame.reflectedCelsius - it.reflectedCelsius) > 1e-5 -> "Correction inputs are applying"
             it.saving -> "Capture is already saving"

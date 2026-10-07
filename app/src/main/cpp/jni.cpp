@@ -64,8 +64,8 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(surface)(JNIEnv* env,jobject,jlong 
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(configure)(JNIEnv* env,jobject,jlong id,jint palette,jboolean flip,jint rotation,jboolean mirror,jboolean automatic,jfloat lower,jfloat upper) {
     try{engine(id)->configure(palette,flip,rotation,mirror,automatic,lower,upper);}catch(const std::exception& e){fail(env,e);}
 }
-extern "C" JNIEXPORT jstring JNICALL JNI_METHOD(open)(JNIEnv* env,jobject,jlong id,jint fd) {
-    try{return env->NewStringUTF(engine(id)->open(fd).c_str());}catch(const std::exception& e){fail(env,e);return nullptr;}
+extern "C" JNIEXPORT jstring JNICALL JNI_METHOD(open)(JNIEnv* env,jobject,jlong id,jint fd,jboolean high_gain) {
+    try{return env->NewStringUTF(engine(id)->open(fd,high_gain).c_str());}catch(const std::exception& e){fail(env,e);return nullptr;}
 }
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(replay)(JNIEnv* env,jobject,jlong id,jbyteArray data) {
     try{std::vector<std::uint8_t> bytes(env->GetArrayLength(data));env->GetByteArrayRegion(data,0,bytes.size(),reinterpret_cast<jbyte*>(bytes.data()));engine(id)->replay(bytes);}catch(const std::exception& e){fail(env,e);}

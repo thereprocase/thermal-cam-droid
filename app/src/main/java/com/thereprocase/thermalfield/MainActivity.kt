@@ -330,7 +330,14 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                         if (state.network) connectNetwork(state.networkUrl) else { model.cameraMode(); permission() }
                     }
                     Action("Run NUC", enabled = state.connected && !state.busy, modifier = Modifier.weight(1f)) { model.command(true) }
-                    Action(if (!state.gainKnown) "Set high gain" else if (state.highGain) "High gain" else "Low gain", enabled = state.connected && !state.busy, modifier = Modifier.weight(1f)) { model.command(false, if (!state.gainKnown) true else !state.highGain) }
+                }
+                Row(Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Action("High gain", state.gainKnown && state.highGain, enabled = state.connected && !state.busy, modifier = Modifier.weight(1f)) {
+                        if (!state.gainKnown || !state.highGain) model.command(false, true)
+                    }
+                    Action("Low gain", state.gainKnown && !state.highGain, enabled = state.connected && !state.busy, modifier = Modifier.weight(1f)) {
+                        if (!state.gainKnown || state.highGain) model.command(false, false)
+                    }
                 }
                 Row(Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Action("Demo", enabled = !state.busy, modifier = Modifier.weight(1f)) { model.fixture() }

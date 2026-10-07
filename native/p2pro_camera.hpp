@@ -13,10 +13,16 @@ public:
     virtual std::vector<std::uint8_t> read(std::uint16_t mailbox, std::size_t length) = 0;
 };
 
+struct BaselineReadback {
+    std::array<std::uint16_t, 6> original;
+    std::array<std::uint16_t, 6> configured;
+};
+
 class Camera {
 public:
     explicit Camera(Transport& transport,
                     std::chrono::milliseconds ready_timeout = std::chrono::seconds(10));
+    BaselineReadback establish_baseline(bool high_gain);
     std::uint16_t property(Property property);
     void set_property(Property property, std::uint16_t value);
     std::vector<std::uint8_t> device_info(unsigned item);

@@ -46,3 +46,16 @@ For the steady performance interval, retain received/rendered/presentation count
 Use the manual **Run NUC** action and observe command state, frame age, identical-content age and recovery. Unchanged content by itself does not prove a shutter event; a static scene can produce it. Treat a known command and observed freeze interval as correlated evidence, and distinguish stopped delivery from repeated radiometric content.
 
 Record scoped outcomes in [VALIDATION.md](VALIDATION.md). Do not mark the physical gates complete from synthetic, desktop-only or network-only checks.
+
+## Opt-in direct-USB automation
+
+The framework test runner can exercise an already permitted physical camera without requiring its GUI to be visible:
+
+```sh
+adb -s "$PIXEL_ADB" shell am instrument -w -e usb_hardware true \
+  com.thereprocase.thermalfield.test/com.thereprocase.thermalfield.ValidationInstrumentation
+```
+
+Install the matching arm64 debug/test APKs first. The test refuses emulator builds, missing cameras and absent USB permission. It opens using the saved USB gain, the alternate gain, and the saved gain again; verifies gain transitions and capture metadata; sends a NUC command; and counts USB descriptors after logical closure. The first phase includes one minute with eight full-plane boxes, eight full-width lines, isotherm and host correction. Later phases use twelve-second steady intervals. It preserves the saved gain preference and publishes numeric results only; captured pixel packets stay in process memory. Run it separately from other app/device tests.
+
+This exercises logical fd/session ownership, not physical cable detach. ImageReader timings do not establish visible compositor presentation. Command completion plus advancing delivery does not establish a visible shutter freeze or radiometric accuracy. Inspect the result rather than relying only on the shell exit code: the framework runner reports failed assertions in its output.

@@ -25,8 +25,53 @@ public:
     }
 };
 
+class PropertyTransport : public p2pro::Transport {
+public:
+    std::array<std::uint16_t, 6> values{7,275,280,90,75,0};
+    int refused_index=-1;
+    unsigned selected=0, property_writes=0;
+    void write(std::uint16_t mailbox,const std::vector<std::uint8_t>& bytes) override {
+        if(mailbox!=0x9d00) return;
+        require(bytes.size()==8 && bytes[0]==0x14,"Baseline command header");
+        selected=bytes[3];require(selected<6,"Baseline property index");
+        if(bytes[1]==0xc5) {
+            ++property_writes;
+            if(int(selected)!=refused_index) values[selected]=std::uint16_t((bytes[6]<<8)|bytes[7]);
+        } else require(bytes[1]==0x85,"Baseline read opcode");
+    }
+    std::vector<std::uint8_t> read(std::uint16_t mailbox,std::size_t length) override {
+        if(mailbox==0x200) return {0};
+        require(mailbox==0x1d10 && length==2,"Baseline reply mailbox");
+        return {std::uint8_t(values[selected]>>8),std::uint8_t(values[selected])};
+    }
+};
+
+void validate_baseline() {
+    for(bool high : {false,true}) {
+        PropertyTransport transport;transport.values[5]=high ? 0:1;
+        const auto original=transport.values;
+        p2pro::Camera camera(transport);
+        const auto result=camera.establish_baseline(high);
+        const std::array<std::uint16_t,6> expected{32,300,300,128,128,std::uint16_t(high ? 1:0)};
+        require(result.original==original && result.configured==expected,"Baseline original/configured evidence");
+        require(transport.property_writes==6,"Baseline changed every mismatching property");
+        camera.establish_baseline(high);
+        require(transport.property_writes==6,"Verified baseline avoids redundant writes");
+        for(int index=0;index<6;++index) {
+            PropertyTransport refused;refused.values=original;refused.refused_index=index;
+            p2pro::Camera failing(refused);bool rejected=false;
+            try { failing.establish_baseline(high); }
+            catch(const std::runtime_error& error) {
+                rejected=std::string(error.what())=="Startup property readback mismatch at index "+std::to_string(index);
+            }
+            require(rejected,"Each mismatched startup readback is rejected");
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     using namespace p2pro;
+    validate_baseline();
     if (argc != 2) throw std::invalid_argument("Captured fixture path required");
     require(standard_header(0x8405, 7, 16) == Header{5, 0x84, 7, 0, 0, 0, 0, 16}, "Serial header");
     require(long_header(0xc514, 5, 1) == Header{0x14, 0xc5, 0, 5, 0, 0, 0, 1}, "Gain header");

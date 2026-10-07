@@ -1,0 +1,58 @@
+{
+  "surface": "ImageReader 768x576",
+  "runs": [
+    {
+      "usb_descriptors_after_close": 0,
+      "high_gain": true,
+      "gain_readback": 1,
+      "received": 447,
+      "rendered": 447,
+      "fps": 25.0018777686,
+      "overflow": 0,
+      "malformed": 0,
+      "source_sequence_gaps": 0,
+      "callback_to_swap_ms": 4.112955,
+      "max_callback_to_swap_ms": 46.435059,
+      "presentation_samples": 0,
+      "capture_metadata_matched": true,
+      "nuc_command_completed": true
+    },
+    {
+      "usb_descriptors_after_close": 0,
+      "high_gain": false,
+      "gain_readback": 0,
+      "received": 513,
+      "rendered": 513,
+      "fps": 24.9928710215,
+      "overflow": 0,
+      "malformed": 0,
+      "source_sequence_gaps": 0,
+      "callback_to_swap_ms": 3.906209,
+      "max_callback_to_swap_ms": 15.207113,
+      "presentation_samples": 0,
+      "capture_metadata_matched": true,
+      "nuc_command_completed": true
+    },
+    {
+      "usb_descriptors_after_close": 0,
+      "high_gain": true,
+      "gain_readback": 1,
+      "received": 513,
+      "rendered": 513,
+      "fps": 25.0053486612,
+      "overflow": 0,
+      "malformed": 0,
+      "source_sequence_gaps": 0,
+      "callback_to_swap_ms": 3.487833,
+      "max_callback_to_swap_ms": 20.491984,
+      "presentation_samples": 0,
+      "capture_metadata_matched": true,
+      "nuc_command_completed": true
+    }
+  ],
+  "physical_detach_reattach": "not tested",
+  "visible_gui_or_shutter_freeze": "not tested",
+  "scope": "three short direct-USB logical reopen runs before the one-minute workload extension",
+  "app_version": "0.1.3-rc1-dev",
+  "sensor_accuracy_validated": false
+}

@@ -84,8 +84,11 @@ private:
         if (cancelled_.load()) throw std::runtime_error("Camera operation cancelled");
         int result = libusb_control_transfer(handle_, input ? 0xc1 : 0x41, input ? 0x44 : 0x45,
                                             0x78, index, bytes.data(), bytes.size(), 1000);
-        if (result < 0) throw std::runtime_error(std::string("USB control: ") + libusb_error_name(result));
-        if (result != static_cast<int>(bytes.size())) throw std::runtime_error("Short USB control transfer");
+        std::ostringstream operation;
+        operation << "USB control " << (input ? "read":"write") << " mailbox 0x" << std::hex << index
+                  << std::dec << " (" << bytes.size() << " bytes)";
+        if (result < 0) throw std::runtime_error(operation.str()+": "+libusb_error_name(result));
+        if (result != static_cast<int>(bytes.size())) throw std::runtime_error(operation.str()+": short transfer, received "+std::to_string(result));
     }
     libusb_device_handle* handle_;
     std::atomic<bool>& cancelled_;
@@ -483,9 +486,10 @@ void Engine::reset_frames(bool fixture) {
 }
 void Engine::stop() {cancel();std::lock_guard<std::mutex> lock(operation_mutex_);close_session();reset_frames(false);}
 
-std::string Engine::open(int fd) {
+std::string Engine::open(int fd, bool high_gain) {
     std::lock_guard<std::mutex> operation(operation_mutex_);close_session();cancelled_=false;
     reset_frames(false);
+    {std::lock_guard<std::mutex> lock(mutex_);gain_mode_=-1;command_active_=true;}
     try {
         libusb_set_option(nullptr,LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
         check_uvc(uvc_init(&context_,nullptr),"UVC initialization");
@@ -498,18 +502,12 @@ std::string Engine::open(int fd) {
         std::ostringstream identity;
         auto string_info=[this](unsigned item) {auto bytes=camera_->device_info(item);return std::string(bytes.begin(),std::find(bytes.begin(),bytes.end(),0));};
         identity << "{\"firmware\":" << quote(string_info(5)) << ",\"persistent_device_identifiers_included\":false,\"original_properties\":[";
-        for (int i=0;i<6;++i) {if(i)identity<<',';identity<<camera_->property(static_cast<p2pro::Property>(i));}
-        // This creates a repeatable register configuration, not an independently
-        // calibrated physical emissivity baseline; preserve that distinction.
-        const std::uint16_t baseline[]={32,300,300,128,128,1};
-        for (int i=0;i<6;++i) {
-            auto p=static_cast<p2pro::Property>(i);
-            if (camera_->property(p)!=baseline[i]) camera_->set_property(p,baseline[i]);
-        }
+        const auto baseline=camera_->establish_baseline(high_gain);
+        for (unsigned i=0;i<6;++i) {if(i)identity<<',';identity<<baseline.original[i];}
         identity << "],\"configured_properties\":[";
-        for (int i=0;i<6;++i) {if(i)identity<<',';identity<<camera_->property(static_cast<p2pro::Property>(i));}
+        for (unsigned i=0;i<6;++i) {if(i)identity<<',';identity<<baseline.configured[i];}
         identity << "],\"physical_baseline_verified\":false}";
-        std::lock_guard<std::mutex> lock(mutex_);identity_=identity.str();return identity_;
+        std::lock_guard<std::mutex> lock(mutex_);identity_=identity.str();gain_mode_=high_gain ? 1:0;command_active_=false;return identity_;
     } catch (...) {close_session();throw;}
 }
 
@@ -726,6 +724,7 @@ std::string Engine::summary(bool include_measurements) {
         <<",\"callback_to_swap_ms\":"<<swap_latency_ms_<<",\"max_callback_to_swap_ms\":"<<max_swap_latency_ms_
         <<",\"callback_processing_ms\":"<<last_presented_.processing_ms<<",\"render_work_ms\":"<<render_work_ms_<<",\"max_render_work_ms\":"<<max_render_work_ms_
         <<",\"presentation_latency_ms\":"<<presentation_latency_ms_<<",\"presentation_samples\":"<<presentation_samples_
+        <<",\"gain_readback\":"<<last_presented_.gain<<",\"command_active\":"<<(last_presented_.command_active ? "true":"false")
         <<",\"rotation_degrees\":"<<((last_presented_.display.rotation+(last_presented_.display.flip ? 2:0))%4)*90
         <<",\"mirrored\":"<<(last_presented_.display.mirror ? "true":"false")
         <<correction_metadata(last_presented_)

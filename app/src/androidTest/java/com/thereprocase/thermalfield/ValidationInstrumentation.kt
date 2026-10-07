@@ -21,9 +21,11 @@ import java.util.concurrent.TimeUnit
 // A framework-only runner exercises Android JSON, MediaStore and the actual
 // native renderer without adding test SDKs to the application dependency set.
 class ValidationInstrumentation : Instrumentation() {
+    private var usbHardware = false
     private var measurementWorkload = false
     private var layoutRestartPhase = ""
     override fun onCreate(arguments: Bundle?) {
+        usbHardware = arguments?.getString("usb_hardware") == "true"
         measurementWorkload = arguments?.getString("workload") == "true"
         layoutRestartPhase = arguments?.getString("layout_restart") ?: ""
         super.onCreate(arguments); start()
@@ -31,6 +33,11 @@ class ValidationInstrumentation : Instrumentation() {
     override fun onStart() {
         val result = Bundle()
         try {
+            if (usbHardware) {
+                result.putString("stream", "Direct USB hardware check: ${validateUsbHardware()}\n")
+                finish(Activity.RESULT_OK, result)
+                return
+            }
             if (layoutRestartPhase.isNotEmpty()) {
                 validateLayoutProcessRestart(layoutRestartPhase)
                 result.putString("stream", "Measurement process-restart $layoutRestartPhase passed.\n")
@@ -49,6 +56,146 @@ class ValidationInstrumentation : Instrumentation() {
         } catch (error: Throwable) {
             result.putString("stream", "Validation failed: ${error.stackTraceToString()}\n")
             finish(Activity.RESULT_CANCELED, result)
+        }
+    }
+
+    private fun validateUsbHardware(): JSONObject {
+        check(!BuildConfig.APPLICATION_ID.endsWith(".emulator")) { "USB hardware checks require the arm64 device build" }
+        val manager = targetContext.getSystemService(android.hardware.usb.UsbManager::class.java)
+        val device = manager.deviceList.values.firstOrNull { it.vendorId == 0x0bda && it.productId == 0x5830 }
+            ?: error("No matching USB camera in Android current device list")
+        check(manager.hasPermission(device)) { "USB permission must already be granted before this opt-in test" }
+        val bridge = NativeBridge()
+        val engine = bridge.create()
+        val consumer = HandlerThread("ThermalUsbHardwareSurface").apply { start() }
+        val reader = ImageReader.newInstance(768, 576, PixelFormat.RGBA_8888, 3)
+        reader.setOnImageAvailableListener({ it.acquireLatestImage()?.close() }, Handler(consumer.looper))
+        var connection: android.hardware.usb.UsbDeviceConnection? = null
+        var opened = false
+        var primaryFailure: Throwable? = null
+        val preferredHigh = targetContext.getSharedPreferences("display", android.content.Context.MODE_PRIVATE).getBoolean("usbHighGain", true)
+        val results = org.json.JSONArray()
+        fun usbDescriptors(): Int = java.io.File("/proc/self/fd").listFiles().orEmpty().count {
+            try { android.system.Os.readlink(it.path).contains("/dev/bus/usb/") } catch (_: android.system.ErrnoException) { false }
+        }
+        val originalUsbDescriptors = usbDescriptors()
+        fun awaitGain(high: Boolean): JSONObject {
+            val deadline = SystemClock.elapsedRealtime()+8000
+            while (SystemClock.elapsedRealtime() < deadline) {
+                val stats = JSONObject(bridge.summary(engine))
+                if (stats.getLong("frame") > 0 && stats.getInt("gain_readback") == (if (high) 1 else 0) &&
+                    !stats.getBoolean("command_active") && stats.getDouble("frame_age_ms") in 0.0..299.0) return stats
+                SystemClock.sleep(20)
+            }
+            error("Fresh frame with requested gain did not arrive")
+        }
+        fun close() {
+            bridge.stop(engine)
+            connection?.close()
+            connection = null
+            opened = false
+        }
+        try {
+            bridge.surface(engine, reader.surface)
+            bridge.configure(engine, 0, false, 0, false, true, 20f, 30f)
+            bridge.correction(engine, 1.0, 20.0, false)
+            // Repeated logical opens exercise fd ownership; physical cable
+            // detach/reattach remains a separate operator-driven gate.
+            for ((run,high) in listOf(preferredHigh, !preferredHigh, preferredHigh).withIndex()) {
+                sendStatus(0,Bundle().apply { putString("stream","USB run ${run+1}: opening with high_gain=$high\n") })
+                close()
+                connection = manager.openDevice(device) ?: error("USB device could not be opened")
+                val identity = JSONObject(bridge.open(engine, connection!!.fileDescriptor, high))
+                opened = true
+                check(identity.getJSONArray("configured_properties").getInt(5) == if (high) 1 else 0)
+                val opened = awaitGain(high)
+                val initialGeneration = opened.getLong("current_generation")
+                if (run == 0) {
+                    val geometry = IntArray(16*6)
+                    for (i in 0 until 16) {
+                        val values = if (i%2 == 0) intArrayOf(i+1,2,0,0,255,191)
+                            else intArrayOf(i+1,3,0,i*12,255,191-i*12)
+                        values.copyInto(geometry,i*6)
+                    }
+                    bridge.correction(engine,.96,20.0,true)
+                    bridge.restoreMeasurements(engine,geometry,0,0,1,20f,30f)
+                }
+                bridge.gain(engine, !high)
+                awaitGain(!high)
+                bridge.gain(engine, high)
+                awaitGain(high)
+                val beforeInterval = awaitGain(high).getLong("received")
+                val interval = if (run == 0) 60_000L else 12_000L
+                val deadline = SystemClock.elapsedRealtime()+interval
+                var stats = opened
+                while (SystemClock.elapsedRealtime() < deadline) {
+                    SystemClock.sleep(200)
+                    stats = awaitGain(high)
+                    check(stats.getLong("overflow") == 0L && stats.getLong("malformed") == 0L && stats.getLong("source_sequence_gaps") == 0L && stats.getString("error").isEmpty()) {
+                        "USB pipeline failure: overflow=${stats.getLong("overflow")}, malformed=${stats.getLong("malformed")}, error=${stats.getString("error")}"
+                    }
+                }
+                check(stats.getDouble("fps") in 24.5..25.5) { "USB frame rate outside 25 Hz tolerance" }
+                if (run == 0) check(stats.getLong("received")-beforeInterval >= 1490 && stats.getJSONArray("measurements").length() == 16) { "One-minute USB workload did not complete" }
+                val packet = bridge.capture(engine)
+                val length = ByteBuffer.wrap(packet,0,4).order(ByteOrder.BIG_ENDIAN).int
+                val metadata = JSONObject(String(packet,4,length,Charsets.UTF_8))
+                check(metadata.getString("gain_mode") == if (high) "high" else "low")
+                check(!metadata.getBoolean("command_active") && metadata.getLong("session_generation") == initialGeneration)
+                val countBefore = stats.getLong("received")
+                bridge.nuc(engine)
+                val recovered = awaitGain(high)
+                val resume = SystemClock.elapsedRealtime()+5000
+                while (JSONObject(bridge.summary(engine)).getLong("received") <= countBefore && SystemClock.elapsedRealtime()<resume) SystemClock.sleep(20)
+                check(JSONObject(bridge.summary(engine)).getLong("received") > countBefore) { "USB frame delivery did not advance after NUC command" }
+                bridge.cancel(engine)
+                val drain = SystemClock.elapsedRealtime()+2000
+                var drained = JSONObject(bridge.summary(engine))
+                while (drained.getLong("received") != drained.getLong("rendered") && SystemClock.elapsedRealtime()<drain) {
+                    SystemClock.sleep(20);drained=JSONObject(bridge.summary(engine))
+                }
+                check(drained.getLong("received") == drained.getLong("rendered")) { "Accepted USB frames did not drain to the renderer" }
+                close()
+                val closedUsbDescriptors = usbDescriptors()
+                check(closedUsbDescriptors == originalUsbDescriptors) { "USB descriptor count changed after logical close" }
+                val result = JSONObject().apply {
+                    put("usb_descriptors_after_close",closedUsbDescriptors)
+                    put("steady_interval_seconds",interval/1000)
+                    put("measurement_count",if (run == 0) 16 else 0)
+                    put("configured_properties",identity.getJSONArray("configured_properties"))
+                    put("original_properties",identity.getJSONArray("original_properties"))
+                    put("drained_received",drained.getLong("received"));put("drained_rendered",drained.getLong("rendered"))
+                    put("high_gain",high);put("gain_readback",recovered.getInt("gain_readback"))
+                    listOf("received","rendered","fps","overflow","malformed","source_sequence_gaps","callback_to_swap_ms","max_callback_to_swap_ms","presentation_samples").forEach { put(it,stats.get(it)) }
+                    put("capture_metadata_matched",true);put("nuc_command_completed",true)
+                }
+                results.put(result)
+                sendStatus(0,Bundle().apply { putString("stream","USB run ${run+1} completed: $result\n") })
+                if (run == 0) {
+                    bridge.restoreMeasurements(engine,IntArray(0),0,0,0,20f,30f)
+                    bridge.correction(engine,1.0,20.0,false)
+                }
+            }
+            return JSONObject().put("surface","ImageReader 768x576").put("runs",results)
+                .put("physical_detach_reattach","not tested").put("visible_gui_or_shutter_freeze","not tested")
+        } catch (error: Throwable) {
+            primaryFailure = error
+            throw error
+        } finally {
+            try {
+                if (opened) try { bridge.gain(engine,preferredHigh) }
+                catch (error: Throwable) {
+                    if (primaryFailure != null) primaryFailure.addSuppressed(error) else throw error
+                }
+            } finally {
+                try {
+                    close()
+                    sendStatus(0,Bundle().apply { putString("stream","USB descriptors after final close: ${usbDescriptors()}\n") })
+                } finally {
+                    bridge.surface(engine, null);bridge.destroy(engine)
+                    reader.setOnImageAvailableListener(null,null);consumer.quitSafely();consumer.join(2000);reader.close()
+                }
+            }
         }
     }
 
@@ -208,6 +355,16 @@ class ValidationInstrumentation : Instrumentation() {
                     check(!active.canCapture() && active.captureRefusalReason().contains("this source")) {
                         "Old-source telemetry was accepted as capture-ready"
                     }
+                    val usb = ready.copy(fixture = false, archive = false, network = false, connected = true,
+                        highGain = false, gainKnown = true, frame = ready.frame.copy(gainReadback = 1))
+                    flow.value = usb
+                    check(!active.canCapture() && active.captureRefusalReason().contains("confirmed gain")) { "Old gain frame was capture-ready" }
+                    flow.value = usb.copy(frame = usb.frame.copy(gainReadback = 0))
+                    check(active.canCapture()) { "Confirmed low-gain frame was refused: ${active.captureRefusalReason()}" }
+                    flow.value = flow.value.copy(frame = flow.value.frame.copy(commandActive = true))
+                    check(!active.canCapture() && active.captureRefusalReason().contains("command")) { "Command-active frame was capture-ready" }
+                    flow.value = usb.copy(gainKnown = false, frame = usb.frame.copy(gainReadback = 0))
+                    check(!active.canCapture()) { "Unknown gain was capture-ready" }
                 } finally { flow.value = ready }
             }
             runOnMainSync { active.deleteMeasurement(0); active.measurementOptions(0, 0, 0) }

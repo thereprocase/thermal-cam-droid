@@ -46,6 +46,22 @@ void Camera::standard_write(std::uint16_t code, std::uint32_t parameter) {
     ready(); send(0x1d00, standard_header(code, parameter, 0)); ready();
 }
 
+BaselineReadback Camera::establish_baseline(bool high_gain) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    // These repeatable register values do not establish a physically neutral
+    // emissivity baseline. Preserve the original array for bench comparison.
+    const std::array<std::uint16_t, 6> requested{32,300,300,128,128,std::uint16_t(high_gain ? 1:0)};
+    BaselineReadback result{};
+    for (unsigned i=0;i<requested.size();++i) result.original[i]=property(static_cast<Property>(i));
+    for (unsigned i=0;i<requested.size();++i) {
+        const auto field=static_cast<Property>(i);
+        if (result.original[i]!=requested[i]) set_property(field,requested[i]);
+        result.configured[i]=property(field);
+        if (result.configured[i]!=requested[i]) throw std::runtime_error("Startup property readback mismatch at index "+std::to_string(i));
+    }
+    return result;
+}
+
 std::uint16_t Camera::property(Property property) {
     const auto index = static_cast<std::uint16_t>(property);
     if (index > 5) throw std::invalid_argument("Unknown property");

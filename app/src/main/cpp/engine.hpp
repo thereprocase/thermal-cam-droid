@@ -75,7 +75,7 @@ public:
     void begin_saved_profile();
     std::string restore_live_profile();
     std::string measurement_state();
-    std::string open(int borrowed_fd);
+    std::string open(int borrowed_fd, bool high_gain);
     void replay(const std::vector<std::uint8_t>& composite);
     void archive(const std::vector<std::uint8_t>& composite, std::int64_t timestamp, const std::string& original_source, int gain,
                  const std::string& firmware, const std::vector<int>& original_properties, const std::vector<int>& configured_properties);

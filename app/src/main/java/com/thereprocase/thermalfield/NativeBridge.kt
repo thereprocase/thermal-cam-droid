@@ -18,7 +18,7 @@ internal class NativeBridge {
     external fun beginSavedProfile(id: Long)
     external fun restoreLiveProfile(id: Long): String
     external fun measurementState(id: Long): String
-    external fun open(id: Long, fd: Int): String
+    external fun open(id: Long, fd: Int, highGain: Boolean): String
     external fun replay(id: Long, frame: ByteArray)
     external fun archive(id: Long, frame: ByteArray, timestamp: Long, originalSource: String, gain: Int, firmware: String, originalProperties: IntArray, configuredProperties: IntArray)
     external fun restoreMeasurements(id: Long, geometry: IntArray, first: Int, second: Int, isotherm: Int, lower: Float, upper: Float, nextId: Int = 0)
