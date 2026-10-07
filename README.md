@@ -4,11 +4,11 @@ An independent, open-source Android thermal viewer for the USB device `0bda:5830
 
 **Development preview.** Live USB, experimental network capture and host radiometric correction have run on a Pixel 9 Pro. Measurement tools are implemented and undergoing device qualification. Comparison against the official app on ice-water and approximately 55 °C water targets has **not** been completed; camera-apparent and model-corrected values are not independently validated surface temperatures.
 
-[Download the arm64 Android APK](https://github.com/thereprocase/thermal-cam-droid/releases/download/v0.1.2/ThermalField-0.1.2-arm64-v8a.apk) · [Release notes and source archive](https://github.com/thereprocase/thermal-cam-droid/releases/tag/v0.1.2) · [Project page and screenshots](https://thereprocase.github.io/projects/thermal-field/)
+[Download the arm64 Android APK](https://github.com/thereprocase/thermal-cam-droid/releases/download/v0.1.3-rc1/ThermalField-0.1.3-rc1-arm64-v8a.apk) · [Release notes and source archive](https://github.com/thereprocase/thermal-cam-droid/releases/tag/v0.1.3-rc1) · [Project page and screenshots](https://thereprocase.github.io/projects/thermal-field/)
 
 ## Current features
 
-The latest published APK is **0.1.2**. Current source prepares **0.1.3-rc1** with the features below, including the larger viewer and sensor-driven full-screen rotation. Software checks have passed on the Pixel and an Android 16 AVD; physical mounting/orientation, baseline/gain/NUC and bath qualification remain pending. This is not a measurement-accuracy certification.
+**0.1.3-rc1** is an experimental release candidate with the features below, including the larger viewer and sensor-driven full-screen rotation. Software checks have passed on the Pixel and an Android 16 AVD; short direct-USB gain/NUC/readback checks also passed. Sustained maximum-workload USB, physical detach/reattach and mounting/orientation, official-app parameter persistence/baseline and bath qualification remain open. This is not a measurement-accuracy certification. Earlier releases retain their original assets.
 
 - Native USB capture through Android UsbManager, a borrowed file descriptor, libusb and libuvc. No proprietary camera SDK.
 - GPU rendering of the bottom 256 × 192 radiometric plane; the camera's AGC preview is ignored for display.
