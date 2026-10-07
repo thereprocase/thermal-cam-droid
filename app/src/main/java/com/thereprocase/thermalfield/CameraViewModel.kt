@@ -73,6 +73,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val engine = bridge.create()
     private val worker = Executors.newSingleThreadExecutor { task -> Thread(task, "P2UsbCommands") }
     private val captureWorker = Executors.newSingleThreadExecutor { task -> Thread(task, "ThermalCaptureIO") }
+    // Listing can read hundreds of sidecars; it must not delay the snapshot
+    // taken by a shutter press on the capture executor.
+    private val galleryWorker = Executors.newSingleThreadExecutor { task -> Thread(task, "ThermalGalleryIO") }
     private val correctionWorker = Executors.newSingleThreadExecutor { task -> Thread(task, "ThermalCorrection") }
     private val correctionGeneration = AtomicLong(0)
     private val measurementGeneration = AtomicLong(0)
@@ -357,7 +360,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun editing(value: Boolean) { mutableState.update { it.copy(editing = value) } }
     fun refreshGallery() {
         mutableState.update { it.copy(galleryLoading = true, galleryError = "") }
-        captureWorker.execute {
+        galleryWorker.execute {
             try {
                 val records = CaptureCatalog.list(context)
                 mutableState.update { it.copy(gallery = records, galleryLoading = false, lastCapture = it.lastCapture ?: records.firstOrNull()?.capture) }
@@ -503,15 +506,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     fun canCapture(): Boolean = captureRefusalReason().isEmpty()
 
+    private class CaptureSessionChanged : IllegalStateException("Capture cancelled: source session changed")
+
+    private fun checkCaptureSession(session: Long) {
+        if (closed || generation.get() != session) throw CaptureSessionChanged()
+    }
+
     fun capture(rawPreferred: Boolean = false) {
         if (!canCapture()) return
+        val sourceSession = generation.get()
         val fahrenheit = state.value.fahrenheit
         mutableState.update { it.copy(saving = true, captureMessage = "Saving capture…") }
         captureWorker.execute {
             try {
-                val saved = CaptureStore.save(context, bridge.capture(engine), fahrenheit, rawPreferred)
+                checkCaptureSession(sourceSession)
+                val packet = bridge.capture(engine)
+                // Source teardown may overlap offscreen rendering. Once the
+                // snapshot is accepted, later IO can finish independently.
+                checkCaptureSession(sourceSession)
+                val saved = CaptureStore.save(context, packet, fahrenheit, rawPreferred)
                 mutableState.update { it.copy(saving = false, lastCapture = saved,
                     captureMessage = if (rawPreferred) "Saved plane, image + JSON · raw selected for sharing" else "Saved image, plane + JSON · Downloads/ThermalField") }
+            } catch (cancelled: CaptureSessionChanged) {
+                mutableState.update { it.copy(saving = false, captureMessage = cancelled.message.orEmpty()) }
             } catch (error: Exception) {
                 mutableState.update { it.copy(saving = false, captureMessage = "Capture failed: ${error.message ?: "Try again"}") }
                 Log.e("ThermalField", "Capture failed", error)
@@ -525,6 +542,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         worker.execute { closeConnection(); bridge.destroy(engine) }
         worker.shutdown()
         captureWorker.shutdown()
+        galleryWorker.shutdown()
         correctionWorker.shutdown()
         super.onCleared()
     }

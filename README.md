@@ -62,7 +62,7 @@ adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell am instrument -w com.thereprocase.thermalfield.test/com.thereprocase.thermalfield.ValidationInstrumentation
 ```
 
-It creates and removes its own synthetic capture set. Its synthetic firmware/register inputs do not qualify physical camera accuracy.
+It creates and removes its own synthetic capture sets. It also holds the gallery worker to verify capture can complete independently, then holds the capture worker to verify a request is cancelled if its source session changes before snapshot acceptance. Its synthetic firmware/register inputs do not qualify physical camera accuracy.
 
 For UI work without an unlocked phone, use an Android 16/API 36 or newer x86_64 AVD. The isolated emulator build uses package `com.thereprocase.thermalfield.emulator`; it shares the native renderer/decoder, but does not change the arm64 device/release configuration. Release variants are disabled when this option is selected.
 

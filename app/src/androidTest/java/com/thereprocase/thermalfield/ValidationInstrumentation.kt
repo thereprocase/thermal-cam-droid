@@ -28,13 +28,102 @@ class ValidationInstrumentation : Instrumentation() {
         try {
             validateSavedProvenance()
             validateQueuedControlCancellation()
+            validateCaptureDuringGalleryWork()
             val workload = if (measurementWorkload) validateMeasurementWorkload().toString() else null
-            result.putString("stream", "Native saved provenance/export and queued control cancellation passed.\n" +
+            result.putString("stream", "Native saved provenance/export, queued control cancellation and capture/gallery isolation passed.\n" +
                 if (workload != null) "Synthetic workload: $workload\n" else "")
             finish(Activity.RESULT_OK, result)
         } catch (error: Throwable) {
             result.putString("stream", "Validation failed: ${error.stackTraceToString()}\n")
             finish(Activity.RESULT_CANCELED, result)
+        }
+    }
+
+    private fun validateCaptureDuringGalleryWork() {
+        val consumer = HandlerThread("ThermalGalleryValidationSurface").apply { start() }
+        val reader = ImageReader.newInstance(256, 192, PixelFormat.RGBA_8888, 3)
+        reader.setOnImageAvailableListener({ it.acquireLatestImage()?.close() }, Handler(consumer.looper))
+        val store = ViewModelStore()
+        val releaseGallery = CountDownLatch(1)
+        val releaseCapture = CountDownLatch(1)
+        val galleryBlocked = CountDownLatch(1)
+        lateinit var model: CameraViewModel
+        var previous: SavedCapture? = null
+        var captureRequested = false
+        var saved: SavedCapture? = null
+        var galleryExecutor: ExecutorService? = null
+        var usbExecutor: ExecutorService? = null
+        var captureExecutor: ExecutorService? = null
+        try {
+            runOnMainSync {
+                model = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(targetContext.applicationContext as Application))[CameraViewModel::class.java]
+                model.surface(reader.surface)
+                model.fixture()
+                model.foreground()
+            }
+            fun executor(name: String) = CameraViewModel::class.java.getDeclaredField(name).apply { isAccessible = true }.get(model) as ExecutorService
+            galleryExecutor = executor("galleryWorker")
+            usbExecutor = executor("worker")
+            captureExecutor = executor("captureWorker")
+            // Hold the real gallery executor after its startup listing. This
+            // proves isolation without assuming a particular MediaStore speed.
+            galleryExecutor.execute { galleryBlocked.countDown(); check(releaseGallery.await(25, TimeUnit.SECONDS)) }
+            check(galleryBlocked.await(5, TimeUnit.SECONDS)) { "Gallery worker did not reach the controlled barrier" }
+            val readyDeadline = SystemClock.elapsedRealtime() + 5000
+            while (!model.canCapture() && SystemClock.elapsedRealtime() < readyDeadline) SystemClock.sleep(20)
+            check(model.canCapture() && model.state.value.fixture) { "Synthetic capture source did not become ready" }
+            previous = model.state.value.lastCapture
+            runOnMainSync { model.refreshGallery(); captureRequested = true; model.capture() }
+            val savedDeadline = SystemClock.elapsedRealtime() + 7000
+            while (SystemClock.elapsedRealtime() < savedDeadline) {
+                val state = model.state.value
+                if (!state.saving && state.lastCapture != null && state.lastCapture != previous) {
+                    saved = state.lastCapture
+                    break
+                }
+                SystemClock.sleep(20)
+            }
+            check(saved != null) { "Capture did not finish while gallery work was blocked: ${model.state.value.captureMessage}" }
+            check(releaseGallery.count == 1L && model.state.value.galleryLoading) { "Gallery barrier was released before capture completed" }
+            val loaded = CaptureCatalog.load(targetContext, saved!!)
+            check(loaded.metadata.getString("source") == "fixture")
+            val fixture = targetContext.assets.open("fixture.yuyv").use { it.readBytes() }
+            check(loaded.composite.copyOfRange(98304, 196608).contentEquals(fixture.copyOfRange(98304, 196608)))
+            releaseGallery.countDown()
+            val captureBlocked = CountDownLatch(1)
+            captureExecutor.execute { captureBlocked.countDown(); check(releaseCapture.await(25, TimeUnit.SECONDS)) }
+            check(captureBlocked.await(5, TimeUnit.SECONDS))
+            runOnMainSync {
+                check(model.canCapture()) { "Synthetic source was not ready for queued capture" }
+                model.capture()
+                model.fixture()
+            }
+            // Let the replacement source run before releasing the request;
+            // the pending capture must retain its original session binding.
+            val replacementDeadline = SystemClock.elapsedRealtime() + 5000
+            while (model.state.value.busy && SystemClock.elapsedRealtime() < replacementDeadline) SystemClock.sleep(20)
+            check(!model.state.value.busy && model.state.value.fixture)
+            SystemClock.sleep(500)
+            releaseCapture.countDown()
+            val cancellationDeadline = SystemClock.elapsedRealtime() + 5000
+            while (model.state.value.saving && SystemClock.elapsedRealtime() < cancellationDeadline) SystemClock.sleep(20)
+            check(!model.state.value.saving && model.state.value.lastCapture == saved &&
+                model.state.value.captureMessage.contains("Capture cancelled: source session changed")) {
+                "Queued capture was not cancelled after changing source: ${model.state.value.captureMessage}"
+            }
+        } finally {
+            releaseGallery.countDown()
+            releaseCapture.countDown()
+            runOnMainSync { store.clear() }
+            galleryExecutor?.awaitTermination(5, TimeUnit.SECONDS)
+            captureExecutor?.awaitTermination(5, TimeUnit.SECONDS)
+            usbExecutor?.awaitTermination(5, TimeUnit.SECONDS)
+            val lastCreated = if (captureRequested) model.state.value.lastCapture?.takeIf { it != previous } else null
+            listOfNotNull(saved, lastCreated).distinctBy { it.id }.forEach { capture ->
+                listOf(capture.rendered, capture.raw, capture.metadata).forEach { targetContext.contentResolver.delete(it, null, null) }
+            }
+            reader.setOnImageAvailableListener(null, null)
+            consumer.quitSafely(); consumer.join(2000); reader.close()
         }
     }
 
