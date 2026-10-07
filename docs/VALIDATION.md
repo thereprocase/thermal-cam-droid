@@ -212,3 +212,5 @@ Stopping point requested by the operator: source changes and scoped measurements
 - The final Pixel integration run passed with the generation guard and explicit stale-telemetry rejection test. The updated arm64 debug app was installed without clearing the existing app data and returned to the USB viewer. Landscape combines navigation and capture actions in one row to reserve more height for the image; portrait retains two compact rows.
 
 - Final Android 16 AVD integration also passed with source-generation matching. Eleven JVM tests and four host native suites passed. A separate landscape accessibility check confirmed Controls, Captures and all capture/share actions occupy one row. Wide letterbox buttons were capped at 140 dp after inspecting that layout; automatic scale removes duplicate endpoint readings from the overlay.
+
+- The final overlay/button sizing build compiled and installed on the Pixel. At the final visual check Android reported the screen off and the lock screen showing; final on-phone gesture/physical-turn checks therefore remain pending. The live USB telemetry sample above was observed earlier in this work, while the phone was unlocked.
