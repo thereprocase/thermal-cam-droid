@@ -37,6 +37,9 @@ add_library(thermal_core SHARED
 target_include_directories(thermal_core PRIVATE ${WORKBENCH}/native)
 target_link_libraries(thermal_core PRIVATE uvc usb android log EGL GLESv3)
 target_link_options(thermal_core PRIVATE "-Wl,-z,max-page-size=16384")
+# Full-plane ROI scans must fit the same 40 ms budget in development builds.
+# Keep symbols/assertions while avoiding unoptimized per-sample call overhead.
+target_compile_options(thermal_core PRIVATE "$<$<CONFIG:Debug>:-O2>")
 target_link_options(usb PRIVATE "-Wl,-z,max-page-size=16384")
 
 # Compiler diagnostics and assertion strings retain source-relative locations

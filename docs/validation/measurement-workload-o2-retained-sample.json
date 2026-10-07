@@ -1,0 +1,16 @@
+{
+  "received": 1494,
+  "rendered": 1494,
+  "fps": 24.9999506753,
+  "malformed": 0,
+  "overflow": 0,
+  "source_sequence_gaps": 0,
+  "callback_to_swap_ms": 21.671794,
+  "max_callback_to_swap_ms": 120.110636,
+  "callback_processing_ms": 17.329671,
+  "render_work_ms": 4.272258,
+  "max_render_work_ms": 95.581543,
+  "presentation_latency_ms": 0,
+  "presentation_samples": 0,
+  "error": ""
+}

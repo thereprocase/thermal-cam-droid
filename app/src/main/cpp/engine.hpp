@@ -38,6 +38,7 @@ struct Frame {
     std::uint64_t generation = 0;
     std::int64_t callback_ns = 0;
     std::int64_t utc_ns = 0;
+    double processing_ms = 0;
     bool fixture = false;
     bool network = false;
     bool archive = false;
@@ -125,6 +126,7 @@ private:
     std::int64_t first_callback_ns_ = 0, last_callback_ns_ = 0, last_change_ns_ = 0;
     std::uint64_t last_hash_ = 0;
     double swap_latency_ms_ = 0, max_swap_latency_ms_ = 0;
+    double render_work_ms_ = 0, max_render_work_ms_ = 0;
     double presentation_latency_ms_ = 0;
     std::uint64_t presentation_samples_ = 0;
 };

@@ -423,6 +423,7 @@ void Engine::reset_frames(bool fixture) {
     received_=rendered_=malformed_=overflow_=0;first_callback_ns_=last_callback_ns_=last_change_ns_=0;
     source_sequence_gaps_=0;source_sequence_seen_=false;
     swap_latency_ms_=max_swap_latency_ms_=presentation_latency_ms_=0;presentation_samples_=0;
+    render_work_ms_=max_render_work_ms_=0;
 }
 void Engine::stop() {cancel();std::lock_guard<std::mutex> lock(operation_mutex_);close_session();reset_frames(false);}
 
@@ -557,6 +558,7 @@ void Engine::ingest(const std::uint8_t* bytes,std::size_t length,std::size_t str
     frame.minimum=minimum;frame.maximum=maximum;
     frame.center=frame.display.correction->temperature[frame.plane[96*256+128]];
     frame.measurements=p2pro::measure(frame.plane,*frame.display.correction,frame.display.measurements);
+    frame.processing_ms=(monotonic_ns()-stamp)/1e6;
     occupied_[slot]=true;queue_[queue_tail_]=slot;queue_tail_=(queue_tail_+1)%4;++queue_size_;condition_.notify_all();
 }
 
@@ -618,13 +620,16 @@ void Engine::render_loop() {
                 bool current=false;
                 {std::lock_guard<std::mutex> lock(mutex_);current=frames_[slot].generation==capture_generation_;}
                 if(current) {
+                    const auto render_start=monotonic_ns();
                     double latency=renderer->draw(frames_[slot]);
+                    const double render_work=(monotonic_ns()-render_start)/1e6;
                     std::lock_guard<std::mutex> lock(mutex_);
                     if(frames_[slot].generation==capture_generation_) {
                         ++rendered_;last_presented_=frames_[slot];
                         error_.clear();
                         retry_attempts=0;
                         swap_latency_ms_=latency;max_swap_latency_ms_=std::max(max_swap_latency_ms_,latency);
+                        render_work_ms_=render_work;max_render_work_ms_=std::max(max_render_work_ms_,render_work);
                     }
                 }
             } catch(const std::exception& e) {
@@ -661,6 +666,7 @@ std::string Engine::summary(bool include_measurements) {
         <<",\"fps\":"<<(elapsed>0 ? (received_-1)/elapsed : 0)<<",\"frame_age_ms\":"<<(last_callback_ns_ ? (now-last_callback_ns_)/1e6 : -1)
         <<",\"unchanged_ms\":"<<(last_change_ns_ ? (now-last_change_ns_)/1e6 : -1)
         <<",\"callback_to_swap_ms\":"<<swap_latency_ms_<<",\"max_callback_to_swap_ms\":"<<max_swap_latency_ms_
+        <<",\"callback_processing_ms\":"<<last_presented_.processing_ms<<",\"render_work_ms\":"<<render_work_ms_<<",\"max_render_work_ms\":"<<max_render_work_ms_
         <<",\"presentation_latency_ms\":"<<presentation_latency_ms_<<",\"presentation_samples\":"<<presentation_samples_
         <<",\"rotation_degrees\":"<<((last_presented_.display.rotation+(last_presented_.display.flip ? 2:0))%4)*90
         <<",\"mirrored\":"<<(last_presented_.display.mirror ? "true":"false")

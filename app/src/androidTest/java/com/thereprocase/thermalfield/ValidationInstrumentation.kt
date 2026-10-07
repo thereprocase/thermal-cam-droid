@@ -21,13 +21,16 @@ import java.util.concurrent.TimeUnit
 // A framework-only runner exercises Android JSON, MediaStore and the actual
 // native renderer without adding test SDKs to the application dependency set.
 class ValidationInstrumentation : Instrumentation() {
-    override fun onCreate(arguments: Bundle?) { super.onCreate(arguments); start() }
+    private var measurementWorkload = false
+    override fun onCreate(arguments: Bundle?) { measurementWorkload = arguments?.getString("workload") == "true"; super.onCreate(arguments); start() }
     override fun onStart() {
         val result = Bundle()
         try {
             validateSavedProvenance()
             validateQueuedControlCancellation()
-            result.putString("stream", "Native saved provenance/export and queued control cancellation passed.\n")
+            val workload = if (measurementWorkload) validateMeasurementWorkload().toString() else null
+            result.putString("stream", "Native saved provenance/export and queued control cancellation passed.\n" +
+                if (workload != null) "Synthetic workload: $workload\n" else "")
             finish(Activity.RESULT_OK, result)
         } catch (error: Throwable) {
             result.putString("stream", "Validation failed: ${error.stackTraceToString()}\n")
@@ -127,6 +130,68 @@ class ValidationInstrumentation : Instrumentation() {
             catch (error: Exception) { message = error.message ?: "" }
             check(message.contains("cleanup could not be confirmed for 1 file")) { "Unconfirmed cleanup was hidden from capture failure" }
             check(it.entries.keys == setOf(0L, 1L) && 0L !in it.deleted)
+        }
+    }
+
+    private fun validateMeasurementWorkload(): JSONObject {
+        val bridge = NativeBridge()
+        val engine = bridge.create()
+        val consumer = HandlerThread("ThermalWorkloadSurface").apply { start() }
+        val reader = ImageReader.newInstance(768, 576, PixelFormat.RGBA_8888, 3)
+        reader.setOnImageAvailableListener({ it.acquireLatestImage()?.close() }, Handler(consumer.looper))
+        try {
+            val frame = targetContext.assets.open("fixture.yuyv").use { it.readBytes() }
+            val geometry = IntArray(16 * 6)
+            for (i in 0 until 16) {
+                val values = if (i % 2 == 0) intArrayOf(i+1, 2, 0, 0, 255, 191)
+                    else intArrayOf(i+1, 3, 0, i*12, 255, 191-i*12)
+                values.copyInto(geometry, i*6)
+            }
+            bridge.surface(engine, reader.surface)
+            bridge.configure(engine, 2, false, 0, false, false, 20f, 30f)
+            bridge.correction(engine, .96, -20.0, true)
+            bridge.restoreMeasurements(engine, geometry, 0, 0, 1, 20f, 30f)
+            bridge.replay(engine, frame)
+            awaitFrame(bridge, engine)
+            val deadline = SystemClock.elapsedRealtime() + 70_000
+            var captured = false
+            var stats = JSONObject(bridge.summary(engine))
+            while (stats.getLong("received") < 1500 && SystemClock.elapsedRealtime() < deadline) {
+                SystemClock.sleep(500)
+                stats = JSONObject(bridge.summary(engine))
+                check(stats.getLong("overflow") == 0L && stats.getLong("malformed") == 0L && stats.getString("error").isEmpty()) {
+                    "Measurement workload pipeline failure: received=${stats.getLong("received")}, rendered=${stats.getLong("rendered")}, overflow=${stats.getLong("overflow")}, malformed=${stats.getLong("malformed")}, error=${stats.getString("error")}, max_swap_ms=${stats.getDouble("max_callback_to_swap_ms")}, processing_ms=${stats.getDouble("callback_processing_ms")}, render_work_ms=${stats.getDouble("render_work_ms")}"
+                }
+                if (!captured && stats.getLong("received") >= 750) {
+                    val packet = bridge.capture(engine)
+                    val length = ByteBuffer.wrap(packet, 0, 4).order(ByteOrder.BIG_ENDIAN).int
+                    val metadata = JSONObject(String(packet, 4, length, Charsets.UTF_8))
+                    check(metadata.getJSONArray("measurements").length() == 16)
+                    check(packet.copyOfRange(4+length+98304, 4+length+196608).contentEquals(frame.copyOfRange(98304,196608)))
+                    captured = true
+                }
+            }
+            check(stats.getLong("received") >= 1500 && captured) { "Measurement workload did not complete its one-minute interval" }
+            bridge.cancel(engine)
+            val drain = SystemClock.elapsedRealtime() + 2000
+            do {
+                stats = JSONObject(bridge.summary(engine))
+                if (stats.getLong("received") == stats.getLong("rendered")) break
+                SystemClock.sleep(20)
+            } while (SystemClock.elapsedRealtime() < drain)
+            check(stats.getLong("received") == stats.getLong("rendered")) { "Measurement workload left unrendered accepted frames" }
+            check(stats.getDouble("fps") in 24.5..25.5)
+            check(stats.getJSONArray("measurements").length() == 16)
+            val keys = listOf("received", "rendered", "fps", "malformed", "overflow", "source_sequence_gaps", "callback_to_swap_ms", "max_callback_to_swap_ms", "callback_processing_ms", "render_work_ms", "max_render_work_ms", "presentation_latency_ms", "presentation_samples", "error")
+            return JSONObject().apply {
+                put("source", "synthetic fixture"); put("surface", "ImageReader 768x576"); put("geometry", "8 full-plane boxes and 8 full-width lines")
+                put("emissivity", .96); put("reflected_celsius", -20); put("capture_during_run", captured)
+                keys.forEach { put(it, stats.get(it)) }
+            }
+        } finally {
+            bridge.surface(engine, null); bridge.stop(engine); bridge.destroy(engine)
+            reader.setOnImageAvailableListener(null, null)
+            consumer.quitSafely(); consumer.join(2000); reader.close()
         }
     }
 

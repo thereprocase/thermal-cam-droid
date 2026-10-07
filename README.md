@@ -64,6 +64,8 @@ adb shell am instrument -w com.thereprocase.thermalfield.test/com.thereprocase.t
 
 It creates and removes its own synthetic capture set. Its synthetic firmware/register inputs do not qualify physical camera accuracy.
 
+Add `-e workload true` to the instrumentation command for an optional one-minute synthetic GPU/measurement workload: 16 geometries, band correction, isotherm and a capture during the stream. It uses a 768×576 ImageReader surface, rather than the visible display, and reports its scoped counters/timings. Native debug code is optimized with symbols and assertions retained to exercise the 40 ms frame budget in development builds.
+
 For foreground recovery checks, first connect the unlocked debug app to a healthy desktop bridge, then run:
 
 ```sh
