@@ -40,6 +40,7 @@ struct Frame {
     std::int64_t utc_ns = 0;
     bool fixture = false;
     bool network = false;
+    bool archive = false;
     int gain = 1;
     bool command_active = false;
     double minimum = 0, maximum = 0, center = 0;
@@ -71,6 +72,8 @@ public:
     std::uint64_t measurement_version();
     std::string open(int borrowed_fd);
     void replay(const std::vector<std::uint8_t>& composite);
+    void archive(const std::vector<std::uint8_t>& composite, std::int64_t timestamp, const std::string& original_source, int gain);
+    void restore_measurements(const std::vector<int>& geometry, unsigned first, unsigned second, int isotherm, float lower, float upper);
     void begin_network();
     void network_frame(const std::vector<std::uint8_t>& bytes, std::uint32_t sequence);
     void cancel();
@@ -109,6 +112,8 @@ private:
     std::unique_ptr<p2pro::Transport> transport_;
     std::unique_ptr<p2pro::Camera> camera_;
     bool streaming_ = false, fixture_ = false, network_ = false;
+    bool archive_ = false;
+    std::int64_t archive_timestamp_ = 0;
     int gain_mode_ = 1;
     bool command_active_ = false;
     std::string error_, identity_ = "{}";

@@ -19,6 +19,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.UUID
 import org.json.JSONObject
 
 data class SavedCapture(val id: String, val rendered: Uri, val raw: Uri, val metadata: Uri, val rawPreferred: Boolean)
@@ -34,8 +35,9 @@ internal object CaptureStore {
         val composite = packet.copyOfRange(4 + length, 4 + length + 196608)
         val rgba = packet.copyOfRange(4 + length + 196608, packet.size)
         val timestamp = metadata.getLong("timestamp_unix_ns")
-        val id = "ThermalField_${Instant.ofEpochSecond(timestamp / 1_000_000_000, timestamp % 1_000_000_000).toString().replace(":", "-")}"
+        val id = "ThermalField_${Instant.ofEpochSecond(timestamp / 1_000_000_000, timestamp % 1_000_000_000).toString().replace(":", "-")}_${UUID.randomUUID()}"
         metadata.put("app_version", BuildConfig.VERSION_NAME)
+        metadata.put("exported_at_unix_ns", System.currentTimeMillis() * 1_000_000L)
         metadata.put("display_unit", if (fahrenheit) "F" else "C")
         metadata.put("preferred_share", if (rawPreferred) "radiometric_plane" else "annotated_image")
         metadata.put("raw_width", 256).put("raw_height", 192).put("raw_sensor_orientation", true)
@@ -141,11 +143,11 @@ internal object CaptureStore {
         canvas.drawRect(16f, row + 14, bitmap.width - 16f, row + 34, paint); paint.shader = null
         canvas.drawText("${if (metadata.getBoolean("automatic_span")) "AUTO" else "LOCKED"}  ${temperature(metadata.optDouble("lower_celsius", Double.NaN))} — ${temperature(metadata.optDouble("upper_celsius", Double.NaN))}", 16f, row + 62, paint)
         canvas.drawText("${if (metadata.optBoolean("correction_applied")) "Corrected ε ${String.format(Locale.US, "%.3f", metadata.getDouble("emissivity"))} R ${temperature(metadata.getDouble("reflected_apparent_celsius"))}" else "Apparent temperature"} · ${metadata.getString("palette")}", 16f, row + 96, paint)
-        val demo = metadata.getString("source") == "fixture"
+        val demo = metadata.getString("source") == "fixture" || metadata.getString("source") == "archive" && metadata.optJSONObject("identity")?.optString("original_source_kind") == "fixture"
         paint.color = if (demo) Color.rgb(255, 244, 220) else Color.rgb(232, 232, 232)
         canvas.drawRect(0f, row + 112, bitmap.width.toFloat(), row + 144, paint)
         paint.color = Color.rgb(16, 16, 16); paint.textSize = 20f
-        val sourceLabel = when (metadata.getString("source")) { "fixture" -> "SYNTHETIC DEMO — NOT A MEASUREMENT"; "camera" -> "SOURCE USB"; "network" -> "SOURCE NETWORK BRIDGE"; else -> "SOURCE UNKNOWN" }
+        val sourceLabel = when (metadata.getString("source")) { "fixture" -> "SYNTHETIC DEMO — NOT A MEASUREMENT"; "camera" -> "SOURCE USB"; "network" -> "SOURCE NETWORK BRIDGE"; "archive" -> if (demo) "SAVED SYNTHETIC DEMO — NOT A MEASUREMENT" else "SOURCE SAVED FRAME / ORIGINAL ACQUISITION"; else -> "SOURCE UNKNOWN" }
         canvas.drawText(sourceLabel, 16f, row + 135, paint)
         paint.textSize = 16f
         canvas.drawText(if (demo) "Original synthetic scene · temperatures are illustrative" else "Camera baseline and comparison accuracy validation pending", 16f, row + 168, paint)

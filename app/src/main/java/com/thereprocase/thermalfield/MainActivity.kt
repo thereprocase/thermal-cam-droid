@@ -173,6 +173,7 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
 
 @Composable private fun ThermalScreen(state: CameraUiState, model: CameraViewModel, permission: () -> Unit, connectNetwork: (String) -> Unit, share: (SavedCapture, String) -> Unit, surfaceCreated: () -> Unit) {
     var sharing by remember { mutableStateOf(false) }
+    var galleryDialog by remember { mutableStateOf(false) }
     var sourceDialog by remember { mutableStateOf(false) }
     var spanDialog by remember { mutableStateOf(false) }
     var sourceAddress by remember { mutableStateOf(state.networkUrl) }
@@ -202,16 +203,16 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
         Row(Modifier.fillMaxWidth().background(Blue).padding(horizontal = 12.dp, vertical = if (compact) 4.dp else 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Label("THERMAL FIELD", color = Color.White, mono = true, size = 18)
             Action("Full screen") { model.fullScreen(true) }
-            Action(if (state.fixture) "Demo" else if (state.network) "Network" else "USB", modifier = Modifier) { sourceDialog = true; model.editing(true) }
+            Action(if (state.archive) "Saved" else if (state.fixture) "Demo" else if (state.network) "Network" else "USB", modifier = Modifier) { sourceDialog = true; model.editing(true) }
         }
         val live: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { viewportHeight ->
-            Pane(if (state.fixture) "DEMO / SYNTHETIC TEMPERATURES" else "RADIOMETRIC VIEW / 256 × 192") {
+            Pane(if (state.archive) "SAVED CAPTURE / ORIGINAL FRAME" else if (state.fixture) "DEMO / SYNTHETIC TEMPERATURES" else "RADIOMETRIC VIEW / 256 × 192") {
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val ratio = if ((state.rotation + if (state.flip) 2 else 0) % 2 == 0) 4f / 3f else 3f / 4f
                 val height = minOf(maxWidth / ratio, viewportHeight)
                 ThermalViewport(state, model, ratio, Modifier.fillMaxWidth().height(height), surfaceCreated)
                 }
-                val visible = state.frame.frame > 0 && (state.connected || state.fixture) && state.frame.error.isEmpty()
+                val visible = state.frame.frame > 0 && (state.connected || state.fixture || state.archive) && state.frame.error.isEmpty()
                 Row(Modifier.fillMaxWidth().background(Light).padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                     if (compact) {
                         Label("MIN ${if (visible) temperature(state.frame.minimum, state.fahrenheit) else "—"}", mono = true, size = 12)
@@ -231,7 +232,7 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                     Label(if (state.automatic) "AUTO SCALE" else "LOCKED SCALE", mono = true)
                     Label(if (visible || !state.automatic) temperature(upper, state.fahrenheit) else "—", mono = true)
                 }
-                Label(if (state.fixture) "Synthetic data · not a camera measurement" else if (state.corrected) "Corrected ε ${String.format(Locale.US, "%.3f", state.emissivity)} · reflected ${temperature(state.reflectedCelsius, state.fahrenheit)} · baseline/accuracy validation pending" else "Apparent temperatures · emissivity not applied · comparison validation pending",
+                Label(if (state.fixture || state.archive && state.archiveSynthetic) "Synthetic data · not a camera measurement" else if (state.archive) "Saved frame · original acquisition time · validation pending" else if (state.corrected) "Corrected ε ${String.format(Locale.US, "%.3f", state.emissivity)} · reflected ${temperature(state.reflectedCelsius, state.fahrenheit)} · baseline/accuracy validation pending" else "Apparent temperatures · emissivity not applied · comparison validation pending",
                     Modifier.fillMaxWidth().background(Color(0xfffff4dc)).padding(8.dp), size = 12)
             }
         }
@@ -296,11 +297,13 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                 }
                 Row(Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Action("Demo", enabled = !state.busy, modifier = Modifier.weight(1f)) { model.fixture() }
+                    Action("Captures", modifier = Modifier.weight(1f)) { model.refreshGallery(); galleryDialog = true; model.editing(true) }
                     if (BuildConfig.DEBUG) Action("Debug frame dump", enabled = state.frame.frame > 0, modifier = Modifier.weight(1f)) { model.dumpFrame() }
                 }
                 if (state.firmware.isNotEmpty()) Label("Firmware ${state.firmware}", Modifier.padding(12.dp), mono = true)
             }
             Pane("PERFORMANCE / DIAGNOSTIC") {
+                if (state.archive) Label("Saved-plane repaint metrics · not live acquisition", Modifier.padding(12.dp), size = 12)
                 val frame = state.frame
                 Label(String.format(Locale.US, "%.2f fps · %d received / %d rendered\n%d source gaps · %d malformed · %d overflow\nCallback → swap %.2f ms\n%s", frame.fps, frame.received, frame.rendered, frame.sourceSequenceGaps, frame.malformed, frame.overflow, frame.swapMs,
                     if (frame.presentationSamples > 0) String.format(Locale.US, "Callback → presentation %.2f ms", frame.presentationMs) else "Presentation timestamp unavailable"), Modifier.padding(12.dp), mono = true)
@@ -348,6 +351,25 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
         }
         Label(if (compact && state.captureMessage.isNotEmpty()) "$status · ${state.captureMessage}" else status,
             Modifier.fillMaxWidth().border(1.dp, Rule).background(Light).padding(horizontal = 12.dp, vertical = if (compact) 6.dp else 12.dp), mono = true, size = if (compact) 12 else 14)
+    }
+    if (galleryDialog) Dialog(onDismissRequest = { galleryDialog = false; model.editing(false) }) {
+        Pane("SAVED CAPTURES") {
+            Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (state.galleryLoading) Label("Loading captures…")
+                if (state.galleryError.isNotEmpty()) Label(state.galleryError, color = Color(0xffb3261e))
+                if (!state.galleryLoading && state.gallery.isEmpty()) Label("No complete captures accessible in Downloads/ThermalField. This gallery lists captures accessible to this installation; importing other files is not implemented yet.")
+                state.gallery.forEach { record ->
+                    Label("${record.displayTime} · ${if (record.source == "fixture") "SYNTHETIC" else record.source.uppercase(Locale.US)}", mono = true, size = 12)
+                    Label(record.summary, size = 12)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Action("Open / reanalyze", modifier = Modifier.weight(1f)) { galleryDialog = false; model.editing(false); model.openSaved(record.capture) }
+                        Action("Share…", modifier = Modifier.weight(1f)) { model.selectCapture(record.capture); galleryDialog = false; model.editing(false); sharing = true }
+                    }
+                }
+                Action("Refresh") { model.refreshGallery() }
+                Action("Close") { galleryDialog = false; model.editing(false) }
+            }
+        }
     }
     if (licenseDialog) Dialog(onDismissRequest = { licenseDialog = false; model.editing(false) }) {
         Pane("LICENSES / NOTICES") {

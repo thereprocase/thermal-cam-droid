@@ -419,7 +419,7 @@ void Engine::reset_frames(bool fixture) {
     }
     queue_tail_=queue_head_;
     last_presented_=Frame{};
-    fixture_=fixture;network_=false;error_.clear();identity_="{}";gain_mode_=fixture ? -1:1;command_active_=false;
+    fixture_=fixture;network_=false;archive_=false;archive_timestamp_=0;error_.clear();identity_="{}";gain_mode_=fixture ? -1:1;command_active_=false;
     received_=rendered_=malformed_=overflow_=0;first_callback_ns_=last_callback_ns_=last_change_ns_=0;
     source_sequence_gaps_=0;source_sequence_seen_=false;
     swap_latency_ms_=max_swap_latency_ms_=presentation_latency_ms_=0;presentation_samples_=0;
@@ -466,6 +466,26 @@ void Engine::replay(const std::vector<std::uint8_t>& bytes) {
         while(!cancelled_) {ingest(bytes.data(),bytes.size(),512);deadline+=std::chrono::milliseconds(40);std::this_thread::sleep_until(deadline);}
     });
 }
+void Engine::archive(const std::vector<std::uint8_t>& bytes,std::int64_t timestamp,const std::string& source,int gain) {
+    if(bytes.size()!=CompositeBytes || timestamp<=0 || gain<-1 || gain>1)throw std::invalid_argument("Invalid saved capture");
+    std::lock_guard<std::mutex> operation(operation_mutex_);close_session();cancelled_=false;reset_frames(false);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);archive_=true;archive_timestamp_=timestamp;gain_mode_=gain;
+        identity_="{\"source\":\"saved capture\",\"original_source_kind\":"+quote(source)+",\"original_timestamp_unix_ns\":"+std::to_string(timestamp)+",\"physical_baseline_verified\":false}";
+    }
+    // Repainting supports palette/correction edits. Repeated frames are a saved
+    // plane, not new sensor acquisitions, and retain the original timestamp.
+    replay_thread_=std::thread([this,bytes]{auto deadline=std::chrono::steady_clock::now();while(!cancelled_){ingest(bytes.data(),bytes.size(),512);deadline+=std::chrono::milliseconds(40);std::this_thread::sleep_until(deadline);}});
+}
+void Engine::restore_measurements(const std::vector<int>& geometry,unsigned first,unsigned second,int isotherm,float lower,float upper) {
+    if(geometry.size()%6 || geometry.size()>p2pro::MaximumMeasurements*6)throw std::invalid_argument("Invalid saved measurement count");
+    p2pro::MeasurementSettings candidate;candidate.count=geometry.size()/6;
+    unsigned maximum=0;
+    for(unsigned i=0;i<candidate.count;++i){const unsigned n=i*6;if(geometry[n]<=0 || geometry[n]==std::numeric_limits<int>::max())throw std::invalid_argument("Invalid saved measurement id");
+        candidate.geometry[i]={unsigned(geometry[n]),static_cast<p2pro::MeasurementKind>(geometry[n+1]),geometry[n+2],geometry[n+3],geometry[n+4],geometry[n+5]};maximum=std::max(maximum,unsigned(geometry[n]));}
+    candidate.delta_first=first;candidate.delta_second=second;candidate.isotherm_enabled=isotherm!=0;candidate.isotherm_mode=static_cast<p2pro::IsothermMode>(isotherm ? isotherm:1);candidate.isotherm_lower=lower;candidate.isotherm_upper=upper;p2pro::validate(candidate);
+    std::lock_guard<std::mutex> lock(mutex_);settings_.measurements=candidate;next_geometry_id_=maximum+1;++settings_.measurement_version;
+}
 void Engine::begin_network() {
     std::lock_guard<std::mutex> operation(operation_mutex_);close_session();cancelled_=false;reset_frames(false);
     std::lock_guard<std::mutex> lock(mutex_);network_=true;gain_mode_=-1;
@@ -507,7 +527,8 @@ void Engine::ingest(const std::uint8_t* bytes,std::size_t length,std::size_t str
     if(slot<0){++overflow_;return;}
     Frame& frame=frames_[slot];frame.sequence=received_;frame.generation=capture_generation_;frame.callback_ns=stamp;frame.display=settings_;
     frame.utc_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    frame.fixture=fixture_;frame.network=network_;
+    frame.fixture=fixture_;frame.network=network_;frame.archive=archive_;
+    if(archive_)frame.utc_ns=archive_timestamp_;
     frame.gain=gain_mode_;frame.command_active=command_active_;
     for(unsigned y=0;y<384;++y)std::memcpy(frame.composite.data()+y*512,bytes+y*stride,512);
     std::uint64_t hash=14695981039346656037ULL;
@@ -621,7 +642,7 @@ std::string Engine::summary(bool include_measurements) {
     std::lock_guard<std::mutex> lock(mutex_);const auto now=monotonic_ns();
     double elapsed=(last_callback_ns_-first_callback_ns_)/1e9;
     std::ostringstream out;out<<std::setprecision(12)<<"{\"frame\":"<<last_presented_.sequence
-        <<",\"source\":"<<quote(fixture_ ? "fixture" : network_ ? "network":"camera")<<",\"minimum\":"<<number(last_presented_.minimum)
+        <<",\"source\":"<<quote(archive_ ? "archive":fixture_ ? "fixture" : network_ ? "network":"camera")<<",\"minimum\":"<<number(last_presented_.minimum)
         <<",\"maximum\":"<<number(last_presented_.maximum)<<",\"center\":"<<number(last_presented_.center)
         <<",\"received\":"<<received_<<",\"rendered\":"<<rendered_<<",\"malformed\":"<<malformed_<<",\"overflow\":"<<overflow_
         <<",\"source_sequence_gaps\":"<<source_sequence_gaps_
@@ -643,7 +664,7 @@ std::vector<std::uint8_t> Engine::snapshot() {
     std::ostringstream json;json<<std::setprecision(12)
         <<"{\"frame\":"<<frame.sequence<<",\"session_generation\":"<<frame.generation
         <<",\"timestamp_unix_ns\":"<<frame.utc_ns<<",\"callback_monotonic_ns\":"<<frame.callback_ns
-        <<",\"timestamp_basis\":\"receiver callback\",\"source\":"<<quote(frame.fixture ? "fixture":frame.network ? "network":"camera")
+        <<",\"timestamp_basis\":"<<quote(frame.archive ? "original saved frame":"receiver callback")<<",\"source\":"<<quote(frame.archive ? "archive":frame.fixture ? "fixture":frame.network ? "network":"camera")
         <<",\"width\":256,\"composite_height\":384,\"plane_height\":192,\"stride\":512,\"format\":\"YUYV\""
         <<",\"minimum_celsius\":"<<number(frame.minimum)<<",\"maximum_celsius\":"<<number(frame.maximum)<<",\"center_celsius\":"<<number(frame.center)
         <<",\"palette\":"<<frame.display.palette<<",\"automatic_span\":"<<(frame.display.automatic ? "true":"false")
@@ -682,7 +703,7 @@ std::vector<std::uint8_t> Engine::capture() {
     std::ostringstream json;json<<std::setprecision(12)
         <<"{\"frame\":"<<frame.sequence<<",\"session_generation\":"<<frame.generation
         <<",\"timestamp_unix_ns\":"<<frame.utc_ns<<",\"callback_monotonic_ns\":"<<frame.callback_ns
-        <<",\"timestamp_basis\":\"receiver callback\",\"source\":"<<quote(frame.fixture ? "fixture":frame.network ? "network":"camera")
+        <<",\"timestamp_basis\":"<<quote(frame.archive ? "original saved frame":"receiver callback")<<",\"source\":"<<quote(frame.archive ? "archive":frame.fixture ? "fixture":frame.network ? "network":"camera")
         <<",\"rendered_width\":"<<width<<",\"rendered_height\":"<<height
         <<",\"minimum_celsius\":"<<number(frame.minimum)<<",\"maximum_celsius\":"<<number(frame.maximum)<<",\"center_celsius\":"<<number(frame.center)
         <<",\"min_display\":["<<minimum.x<<','<<minimum.y<<"],\"max_display\":["<<maximum.x<<','<<maximum.y

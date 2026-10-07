@@ -44,7 +44,7 @@ The M2 implementation is present; its full acceptance gate remains open. Physica
 - Android measurement tools, correction qualification, export annotation correctness across all transforms, and saved-capture reanalysis.
 - Repeated physical detach/reattach on the final application build, permission-denial recovery and landscape usability.
 - Remote command recovery, per-frame network gain/command provenance, and long network runs under congestion. TCP delivery does not guarantee all source frames are displayed; sequence counters are the evidence.
-- Full release signing, dependency redistribution audit and public APK/site delivery.
+- Further release qualification after changes; initial signed APK, source archive, redistribution notices and public project site were delivered as a development prerelease.
 
 M2 follow-up after unlock: finger-down placement was retested. The box recorded sensor corners (25,172)–(217,28), **27,985** inclusive samples, mean **20.5145919 °C**. The line recorded (51,153)–(204,38), **154** samples. Independent statistics/profile verification and every-word raw preservation passed. Selecting P2 as ΔT A and P1 as B yielded **25.5102109909 °C**. A 20–30 °C band matched **35,718** pixels, independently counted across the complete original plane. Mirroring retained every sensor coordinate, reading and profile while reflecting display x coordinates.
 
@@ -60,3 +60,15 @@ Wireless ADB was subsequently recovered through the already configured Tailscale
 - A binary/package scan found none of the configured private workstation paths, phone/camera identifiers, LAN/Tailnet addresses or signing password. This is a scoped pattern scan, not a claim that arbitrary user captures can never identify a person.
 - Release code was installed under a temporary alternative application ID to preserve the existing development app's private data. Launch was blocked by the phone's keyguard in that run; release-specific UI smoke testing remains open. Earlier development-build phone results remain scoped to their recorded builds.
 - Source archive and SHA-256 checksums accompany the development prerelease. Full objective acceptance, physical baseline/bath qualification and remaining recovery/reanalysis work are not declared complete by publication.
+
+## Saved-capture reanalysis and release smoke check
+
+- After the phone was unlocked, the release-code installation under the temporary application ID opened the synthetic source and Volume Down reported successful three-file capture. This closes the earlier lock-screen interruption for that basic workflow; it does not cover direct USB in the release build.
+- The development gallery listed complete capture sets accessible to the current installation. Reopening a saved synthetic frame restored the correction inputs, palette and 90° mirrored orientation. A derived export preserved all **49,152 original radiometric words** and the original acquisition timestamp, with a separate current export timestamp and a unique filename suffix.
+- Reopening the synthetic capture with P1/P2, B3 and L4 restored their original IDs and sensor coordinates, ordered delta and the 20–30 °C band. Independent quadrature/bisection verification passed for extrema, center, every region statistic and every line sample within **0.001 °C**. The annotated export was inspected with the explicit **SAVED SYNTHETIC DEMO — NOT A MEASUREMENT** caption, original timestamp, legend, ROI statistics, delta and **35,718** highlighted pixels. These remain synthetic checks.
+- Full-screen saved-frame view displayed **SAVED FRAME · SYNTHETIC** with scale and correction context. Saved-plane repaint counters are labeled separately from live acquisition metrics.
+- Independent JVM ImageIO encoding/decoding tests preserve every 16-bit sample in both directions. PNG checksum corruption, truncation and 8-bit input rejection were checked. Four host native suites and Android build/unit tests passed.
+
+- The latest build reopened the four-geometry saved frame, changed its palette to White-hot, returned Home and resumed the viewer. The subsequent export retained White-hot, the original acquisition timestamp, four geometries, ordered delta and the isotherm count. Independent raw/statistic/profile verification passed again. Gallery ordering uses export time while displaying acquisition time, so newly derived exports can become the restored most-recent share item.
+
+Remaining gallery checks: share-chooser handoff, captures with invalid radiance, inaccessible or malformed sidecars, and physical-camera saved frames. File import from another installation is not implemented; the gallery describes this limit explicitly. Reopening source metadata does not establish a verified physical baseline.

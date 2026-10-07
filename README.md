@@ -8,6 +8,8 @@ An independent, open-source Android thermal viewer for the USB device `0bda:5830
 
 ## Current features
 
+The list describes the latest source. Saved-capture browsing/reanalysis was added after the v0.1.0 APK.
+
 - Native USB capture through Android UsbManager, a borrowed file descriptor, libusb and libuvc. No proprietary camera SDK.
 - GPU rendering of the bottom 256 × 192 radiometric plane; the camera's AGC preview is ignored for display.
 - Ironbow, white-hot and rainbow; center/min/max markers; °C/°F; automatic or manually locked span with deliberate clipping.
@@ -18,12 +20,13 @@ An independent, open-source Android thermal viewer for the USB device `0bda:5830
 - Immersive full-screen view with capture/exit overlays, temperature scale, source/model context and working volume-key capture. Back exits full-screen mode.
 - Capture an annotated PNG, original 16-bit grayscale radiometric PNG and JSON sidecar through MediaStore, under `Downloads/ThermalField`.
 - Volume Down captures the annotated view; Volume Up or X selects raw as the preferred share item. Every capture still saves all three files. Share one image, the raw plane or the complete set through Android's chooser.
+- Browse complete captures accessible to this installation and reopen their original 16-bit planes for reanalysis. Restore saved correction, palette, orientation and sensor-coordinate measurements; derived exports preserve acquisition time and record a separate export time. Saved synthetic frames remain explicitly labeled.
 - Manual NUC and gain controls; frame-age and performance diagnostics; debug composite-frame dumps.
 - Global emissivity/reflected apparent temperature inputs and raw/corrected display using an integrated 8–14 µm Planck model. Extrema, center, GPU coloring and capture metadata share the same per-frame lookup table. Invalid solutions are magenta and excluded from extrema.
 - Original synthetic demo for UI development, explicitly labeled as synthetic.
 - Experimental lossless network source from the included desktop bridge. This decoder requires original composites with thermal-field-v1 headers; other IP thermal camera formats need an adapter.
 
-Planned: saved-capture browsing/reanalysis, annotation naming/persistence across process restart and further lifecycle/accuracy qualification. See [feature scope](docs/FEATURES.md) and [validation](docs/VALIDATION.md).
+Planned: importing captures from other installations, annotation naming/persistence across process restart and further lifecycle/accuracy qualification. See [feature scope](docs/FEATURES.md) and [validation](docs/VALIDATION.md).
 
 <img src="docs/synthetic-export.png" width="320" alt="A rotated synthetic enclosure export with temperature markers, palette legend and an explicit synthetic-data caption">
 
