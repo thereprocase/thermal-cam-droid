@@ -40,8 +40,8 @@ extern "C" JNIEXPORT jstring JNICALL JNI_METHOD(restoreLiveProfile)(JNIEnv* env,
     try { return env->NewStringUTF(engine(id)->restore_live_profile().c_str()); }
     catch (const std::exception& e) { fail(env,e); return nullptr; }
 }
-extern "C" JNIEXPORT jint JNICALL JNI_METHOD(geometry)(JNIEnv* env,jobject,jlong id,jint measurement,jint kind,jdouble x0,jdouble y0,jdouble x1,jdouble y1) {
-    try{return engine(id)->geometry(measurement,kind,x0,y0,x1,y1);}catch(const std::exception& e){fail(env,e);return 0;}
+extern "C" JNIEXPORT jint JNICALL JNI_METHOD(geometry)(JNIEnv* env,jobject,jlong id,jint measurement,jint kind,jdouble x0,jdouble y0,jdouble x1,jdouble y1,jint expected_rotation,jboolean expected_mirror) {
+    try{return engine(id)->geometry(measurement,kind,x0,y0,x1,y1,expected_rotation,expected_mirror);}catch(const std::exception& e){fail(env,e);return 0;}
 }
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(eraseGeometry)(JNIEnv* env,jobject,jlong id,jint measurement) {
     try{engine(id)->erase_geometry(measurement);}catch(const std::exception& e){fail(env,e);}
@@ -61,8 +61,8 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(destroy)(JNIEnv*,jobject,jlong id) 
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(surface)(JNIEnv* env,jobject,jlong id,jobject surface) {
     try{engine(id)->set_surface(surface ? ANativeWindow_fromSurface(env,surface) : nullptr);}catch(const std::exception& e){fail(env,e);}
 }
-extern "C" JNIEXPORT void JNICALL JNI_METHOD(configure)(JNIEnv* env,jobject,jlong id,jint palette,jboolean flip,jint rotation,jboolean mirror,jboolean automatic,jfloat lower,jfloat upper) {
-    try{engine(id)->configure(palette,flip,rotation,mirror,automatic,lower,upper);}catch(const std::exception& e){fail(env,e);}
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(configure)(JNIEnv* env,jobject,jlong id,jint palette,jboolean flip,jint rotation,jboolean mirror,jboolean automatic,jfloat lower,jfloat upper,jboolean preview_mirror,jint mounting,jint screen_rotation) {
+    try{engine(id)->configure(palette,flip,rotation,mirror,automatic,lower,upper,preview_mirror,mounting,screen_rotation);}catch(const std::exception& e){fail(env,e);}
 }
 extern "C" JNIEXPORT jstring JNICALL JNI_METHOD(open)(JNIEnv* env,jobject,jlong id,jint fd,jboolean high_gain) {
     try{return env->NewStringUTF(engine(id)->open(fd,high_gain).c_str());}catch(const std::exception& e){fail(env,e);return nullptr;}

@@ -44,13 +44,14 @@ class ValidationInstrumentation : Instrumentation() {
                 finish(Activity.RESULT_OK, result)
                 return
             }
+            validateSelfiePreviewExport()
             validateSavedProvenance()
             validateQueuedControlCancellation()
             validateCaptureDuringGalleryWork()
             validateSavedLiveProfiles()
             validateMeasurementPersistence()
             val workload = if (measurementWorkload) validateMeasurementWorkload().toString() else null
-            result.putString("stream", "Native saved provenance/export, queued control cancellation, capture/gallery isolation, saved/live profile isolation and measurement persistence passed.\n" +
+            result.putString("stream", "Native selfie preview/export and tap mapping, saved provenance/export, queued control cancellation, capture/gallery isolation, saved/live profile isolation and measurement persistence passed.\n" +
                 if (workload != null) "Synthetic workload: $workload\n" else "")
             finish(Activity.RESULT_OK, result)
         } catch (error: Throwable) {
@@ -671,6 +672,105 @@ class ValidationInstrumentation : Instrumentation() {
                 listOf(capture.rendered, capture.raw, capture.metadata).forEach { targetContext.contentResolver.delete(it, null, null) }
             }
             reader.setOnImageAvailableListener(null, null)
+            consumer.quitSafely(); consumer.join(2000); reader.close()
+        }
+    }
+
+    private fun validateSelfiePreviewExport() {
+        val bridge = NativeBridge()
+        val engine = bridge.create()
+        val consumer = HandlerThread("ThermalSelfieSurface").apply { start() }
+        val reader = ImageReader.newInstance(256, 192, PixelFormat.RGBA_8888, 3)
+        val latest = java.util.concurrent.atomic.AtomicReference<ByteArray?>()
+        reader.setOnImageAvailableListener({ source ->
+            source.acquireLatestImage()?.use { image ->
+                val plane = image.planes[0]
+                val pixels = ByteArray(256 * 192 * 4)
+                for (y in 0 until 192) for (x in 0 until 256) for (channel in 0..3) {
+                    pixels[(y*256+x)*4+channel] = plane.buffer.get(y*plane.rowStride+x*plane.pixelStride+channel)
+                }
+                latest.set(pixels)
+            }
+        }, Handler(consumer.looper))
+        fun unpack(packet: ByteArray): Pair<JSONObject, ByteArray> {
+            val length = ByteBuffer.wrap(packet, 0, 4).order(ByteOrder.BIG_ENDIAN).int
+            return JSONObject(String(packet, 4, length, Charsets.UTF_8)) to packet.copyOfRange(4+length+196608, packet.size)
+        }
+        try {
+            val frame = targetContext.assets.open("fixture.yuyv").use { it.readBytes() }
+            targetContext.cacheDir.resolve("selfie-fixture.yuyv").writeBytes(frame)
+            bridge.surface(engine, reader.surface)
+            bridge.configure(engine, 0, false, 0, false, true, 20f, 30f)
+            bridge.geometry(engine, 0, 1, .125, .75, .125, .75)
+            bridge.archive(engine, frame, 1_700_000_000_000_000_000L, "fixture", 1, "", intArrayOf(), intArrayOf())
+            awaitFrame(bridge, engine)
+            for (palette in 0..2) for (explicitMirror in listOf(false, true)) for (turn in 0..3) {
+                bridge.configure(engine, palette, false, turn, explicitMirror, true, 20f, 30f)
+                var expectedVersion = bridge.measurementVersion(engine)
+                fun ready() {
+                    val deadline = SystemClock.elapsedRealtime()+5000
+                    while (SystemClock.elapsedRealtime()<deadline) {
+                        if (JSONObject(bridge.summary(engine)).getLong("measurement_version")==expectedVersion) return
+                        SystemClock.sleep(20)
+                    }
+                    error("Selfie preview settings did not reach renderer")
+                }
+                ready()
+                val (original, output) = unpack(bridge.capture(engine))
+                bridge.configure(engine, palette, false, turn, explicitMirror, true, 20f, 30f, true, 2, turn)
+                expectedVersion = bridge.measurementVersion(engine)
+                ready()
+                val packet = bridge.capture(engine)
+                val (selfie, saved) = unpack(packet)
+                check(saved.contentEquals(output)) { "Selfie preview mirror changed export pixels" }
+                check(selfie.getBoolean("mirrored")==explicitMirror)
+                check(selfie.getBoolean("preview_mirrored")!=explicitMirror)
+                check(selfie.getBoolean("selfie_preview_mirrored") && selfie.getString("mounting")=="selfie")
+                check(selfie.getInt("screen_rotation_degrees")==turn*90)
+                val a=original.getJSONArray("measurements").getJSONObject(0).getJSONArray("display_start")
+                val b=selfie.getJSONArray("measurements").getJSONObject(0).getJSONArray("display_start")
+                check(a.toString()==b.toString()) { "Export annotation followed preview mirror" }
+                val preview=JSONObject(bridge.summary(engine)).getJSONArray("measurements").getJSONObject(0).getJSONArray("display_start")
+                check(kotlin.math.abs(preview.getDouble(0)-(1-b.getDouble(0)))<1e-10 && preview.getDouble(1)==b.getDouble(1))
+                val length=ByteBuffer.wrap(packet,0,4).order(ByteOrder.BIG_ENDIAN).int
+                check(packet.copyOfRange(4+length+98304,4+length+196608).contentEquals(frame.copyOfRange(98304,196608)))
+                if (turn==0) {
+                    // ImageReader rows start at the top; native FBO captures start
+                    // at the bottom. Compare actual preview pixels after both maps.
+                    val expected=ByteArray(saved.size)
+                    for(y in 0 until 192) for(x in 0 until 256) for(channel in 0..3) {
+                        expected[(y*256+x)*4+channel]=saved[((191-y)*256+(255-x))*4+channel]
+                    }
+                    val deadline=SystemClock.elapsedRealtime()+5000
+                    while (latest.get()?.contentEquals(expected)!=true && SystemClock.elapsedRealtime()<deadline) SystemClock.sleep(20)
+                    check(latest.get()?.contentEquals(expected)==true) {
+                        val actual=latest.get()
+                        if(actual!=null) {
+                            targetContext.cacheDir.resolve("selfie-expected.rgba").writeBytes(expected)
+                            targetContext.cacheDir.resolve("selfie-actual.rgba").writeBytes(actual)
+                            targetContext.cacheDir.resolve("selfie-output.rgba").writeBytes(saved)
+                            targetContext.cacheDir.resolve("selfie-metadata.json").writeText(selfie.toString())
+                        }
+                        "GPU preview did not mirror exported image horizontally; palette=$palette explicitMirror=$explicitMirror turn=$turn actual=${actual?.size}, differences=${actual?.indices?.count { actual[it]!=expected[it] }}"
+                    }
+                    val beforeGeometry=bridge.measurementState(engine)
+                    for ((oldRotation,oldMirror) in listOf(1 to !explicitMirror, 0 to explicitMirror)) {
+                        var staleRefused=false
+                        try { bridge.geometry(engine,0,1,.8,.3,.8,.3,oldRotation,oldMirror) }
+                        catch(error:IllegalStateException) { staleRefused=error.message?.contains("orientation changed")==true }
+                        check(staleRefused && bridge.measurementState(engine)==beforeGeometry) { "Stale-pose tap changed geometry" }
+                    }
+                    val id=bridge.geometry(engine,0,1,.8,.3,.8,.3)
+                    val geometry=JSONObject(bridge.measurementState(engine)).getJSONArray("geometry")
+                    val placed=(0 until geometry.length()).map { geometry.getJSONArray(it) }.first { it.getInt(0)==id }
+                    // The inverse map depends on the explicit mirror as well.
+                    check(placed.getInt(2)==if(explicitMirror) 204 else 51)
+                    bridge.eraseGeometry(engine,id)
+                }
+            }
+        } finally {
+            bridge.surface(engine,null); bridge.destroy(engine)
+            reader.setOnImageAvailableListener(null,null)
             consumer.quitSafely(); consumer.join(2000); reader.close()
         }
     }

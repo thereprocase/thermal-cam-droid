@@ -35,7 +35,7 @@ data class FrameTelemetry(
     val center: Double = 0.0, val received: Long = 0, val rendered: Long = 0,
     val malformed: Long = 0, val overflow: Long = 0, val fps: Double = 0.0,
     val sourceSequenceGaps: Long = 0, val gainReadback: Int = -1, val commandActive: Boolean = false,
-    val invalidPixels: Int = 0,
+    val invalidPixels: Int = 0, val renderRotation: Int = 0, val previewMirrored: Boolean = false,
     val ageMs: Double = -1.0, val unchangedMs: Double = -1.0, val observedAtMillis: Long = 0,
     val swapMs: Double = 0.0, val presentationMs: Double = 0.0,
     val presentationSamples: Long = 0, val error: String = "",
@@ -49,6 +49,7 @@ data class CameraUiState(
     val fixture: Boolean = false, val busy: Boolean = false, val palette: Int = 0,
     val flip: Boolean = false, val fahrenheit: Boolean = false, val rotationLocked: Boolean = false,
     val rotation: Int = 0, val mirror: Boolean = false, val displayRotation: Int = 0,
+    val selfie: Boolean = false,
     val automatic: Boolean = true, val lower: Float = 20f, val upper: Float = 30f,
     val highGain: Boolean = true, val frame: FrameTelemetry = FrameTelemetry(),
     val serial: String = "", val firmware: String = "", val captureMessage: String = "",
@@ -70,10 +71,16 @@ data class CameraUiState(
     val gallery: List<CaptureRecord> = emptyList(), val galleryLoading: Boolean = false, val galleryError: String = "",
 )
 
-// The attached camera rotates with the phone. Screen orientation controls
-// GUI layout; it must not add another transform to the camera image.
+// Android rotates the whole surface, including its camera pixels. The mounting
+// direction determines roll handedness; preview mirroring is applied afterward.
+internal val CameraUiState.phoneMounted: Boolean
+    get() = !archive && !network && !fixture
+internal val CameraUiState.cameraRotation: Int
+    get() = (rotation + (if (phoneMounted) displayRotation * (if (selfie) -1 else 1) else 0) + 4) % 4
 internal val CameraUiState.renderRotation: Int
-    get() = (rotation + (if (flip) 2 else 0)) % 4
+    get() = (cameraRotation + (if (flip) 2 else 0)) % 4
+internal val CameraUiState.previewMirrored: Boolean
+    get() = mirror xor (phoneMounted && selfie)
 
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application
@@ -113,6 +120,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         palette = preferences.getInt("palette", 0), flip = preferences.getBoolean("flip", false),
         fahrenheit = preferences.getBoolean("fahrenheit", false),
         rotationLocked = preferences.getBoolean("rotationLocked", false),
+        selfie = preferences.getBoolean("selfie", false),
         rotation = preferences.getInt("rotation", 0), mirror = preferences.getBoolean("mirror", false),
         highGain = preferences.getBoolean("usbHighGain", true), gainKnown = false,
         networkUrl = preferences.getString("networkUrl", "") ?: "",
@@ -162,7 +170,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val frame = FrameTelemetry(
                         frame = json.getLong("frame"), minimum = json.optDouble("minimum", Double.NaN),
                         maximum = json.optDouble("maximum", Double.NaN), center = json.optDouble("center", Double.NaN),
-                        invalidPixels = json.optInt("invalid_pixels"),
+                        invalidPixels = json.optInt("invalid_pixels"), renderRotation = json.optInt("rotation_degrees") / 90,
+                        previewMirrored = json.optBoolean("mirrored"),
                         received = json.getLong("received"), rendered = json.getLong("rendered"),
                         malformed = json.getLong("malformed"), overflow = json.getLong("overflow"),
                         sourceSequenceGaps = json.optLong("source_sequence_gaps"), gainReadback = json.getInt("gain_readback"), commandActive = json.getBoolean("command_active"),
@@ -452,6 +461,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (archiveSelected == null) preferences.edit().putInt("rotation", state.value.rotation).apply()
         configure()
     }
+    fun mounting(selfie: Boolean) {
+        if (state.value.profileApplying || !state.value.phoneMounted) return
+        mutableState.update { it.copy(selfie = selfie) }
+        preferences.edit().putBoolean("selfie", selfie).apply()
+        configure()
+    }
     fun mirror() {
         if (state.value.profileApplying) return
         mutableState.update { it.copy(mirror = !it.mirror) }
@@ -566,6 +581,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         require(quarterTurns in 0..3)
         if (state.value.displayRotation == quarterTurns) return
         mutableState.update { it.copy(displayRotation = quarterTurns) }
+        if (!state.value.profileApplying) configure()
     }
     fun fullScreen(value: Boolean) { mutableState.update { it.copy(fullScreen = value) } }
     private fun measurementChange(operation: () -> Unit) {
@@ -612,10 +628,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     fun placeMeasurement(x0: Double, y0: Double, x1: Double, y1: Double) {
         val kind = state.value.measurementTool; val id = state.value.selectedMeasurement
-        if (kind !in 1..3 || state.value.frame.frame == 0L) return
+        val frame = state.value.frame
+        if (kind !in 1..3 || frame.frame == 0L || frame.renderRotation != state.value.renderRotation || frame.previewMirrored != state.value.previewMirrored) return
         measurementChange {
             try {
-                bridge.geometry(engine, id, kind, x0, y0, x1, y1)
+                bridge.geometry(engine, id, kind, x0, y0, x1, y1, frame.renderRotation, frame.previewMirrored)
                 mutableState.update { it.copy(selectedMeasurement = 0, captureMessage = "Measurement placed · sensor coordinates") }
             } catch (error: Exception) { message(error.message ?: "Measurement could not be placed") }
         }
@@ -640,7 +657,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun nativeSourceGeneration(): Long = JSONObject(bridge.summary(engine)).getLong("current_generation")
 
     private fun configure() {
-        state.value.let { bridge.configure(engine, it.palette, it.flip, it.rotation, it.mirror, it.automatic, it.lower, it.upper) }
+        state.value.let { bridge.configure(engine, it.palette, it.flip, it.cameraRotation, it.mirror, it.automatic, it.lower, it.upper,
+            it.phoneMounted && it.selfie, if (it.phoneMounted) (if (it.selfie) 2 else 1) else 0, it.displayRotation) }
         val version = bridge.measurementVersion(engine)
         mutableState.update { it.copy(expectedMeasurementVersion = version) }
     }

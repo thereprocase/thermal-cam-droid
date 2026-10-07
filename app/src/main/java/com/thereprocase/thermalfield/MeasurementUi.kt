@@ -29,13 +29,13 @@ private fun imageBounds(width: Float, height: Float, ratio: Float): FloatArray {
     val context = LocalContext.current
     val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = context.resources.getFont(R.font.plex_mono_regular) } }
     val tool = state.measurementTool
-    val gesture = if (tool == 1) Modifier.pointerInput(tool, state.selectedMeasurement, ratio) {
+    val gesture = if (tool == 1) Modifier.pointerInput(tool, state.selectedMeasurement, ratio, state.renderRotation, state.previewMirrored) {
         detectTapGestures { offset ->
             val b = imageBounds(size.width.toFloat(), size.height.toFloat(), ratio)
             val x = (offset.x - b[0]) / b[2]; val y = (offset.y - b[1]) / b[3]
             if (x in 0f..1f && y in 0f..1f && state.frame.frame > 0) model.placeMeasurement(x.toDouble(), y.toDouble(), x.toDouble(), y.toDouble())
         }
-    } else if (tool in 2..3) Modifier.pointerInput(tool, state.selectedMeasurement, ratio) {
+    } else if (tool in 2..3) Modifier.pointerInput(tool, state.selectedMeasurement, ratio, state.renderRotation, state.previewMirrored) {
         fun normalized(offset: Offset): Offset {
             val b = imageBounds(size.width.toFloat(), size.height.toFloat(), ratio)
             return Offset(((offset.x - b[0]) / b[2]).coerceIn(0f, 1f), ((offset.y - b[1]) / b[3]).coerceIn(0f, 1f))

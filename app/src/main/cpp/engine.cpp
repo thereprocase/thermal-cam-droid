@@ -45,10 +45,10 @@ std::string correction_metadata(const Frame& frame) {
         <<",\"atmospheric_transmission_assumed\":1,\"invalid_pixels\":"<<frame.invalid_pixels;
     return out.str();
 }
-std::string measurement_metadata(const Frame& frame) {
+std::string measurement_metadata(const Frame& frame, bool preview = false) {
     const auto& settings=frame.display.measurements;
     const unsigned rotation=(frame.display.rotation+(frame.display.flip ? 2:0))%4;
-    p2pro::Orientation orientation{rotation,frame.display.mirror};
+    p2pro::Orientation orientation=p2pro::Orientation{rotation,frame.display.mirror}.preview(preview && frame.display.preview_mirror);
     auto point=[&](int x,int y){return orientation.to_display({(x+.5)/256,(y+.5)/192});};
     std::ostringstream out;out<<std::setprecision(12)<<",\"measurement_version\":"<<frame.display.measurement_version<<",\"measurements\":[";
     for(unsigned i=0;i<settings.count;++i) {
@@ -117,6 +117,7 @@ void main() {
 
 const char* fragment_source = R"GLSL(#version 300 es
 precision highp float;
+precision highp int;
 precision highp usampler2D;
 in vec2 uv;
 out vec4 color;
@@ -133,15 +134,21 @@ uniform ivec4 geometry[16];
 uniform int geometryKind[16];
 uniform int isothermMode;
 uniform vec2 isothermLimits;
-vec3 ramp(float t) {
-    if (palette == 1) return vec3(t);
-    if (palette == 2) {
-        vec3 a[6] = vec3[6](vec3(0,0,100),vec3(0,90,255),vec3(0,220,180),vec3(190,255,0),vec3(255,140,0),vec3(180,0,0));
-        float p=t*5.0; int i=min(4,int(p)); return mix(a[i],a[i+1],p-float(i))/255.0;
-    }
-    vec3 a[6] = vec3[6](vec3(0),vec3(45,0,80),vec3(170,25,70),vec3(245,110,15),vec3(255,220,70),vec3(255));
-    float p=t*5.0; int i=min(4,int(p)); return mix(a[i],a[i+1],p-float(i))/255.0;
+vec3 interpolateStops(float t,vec3 a,vec3 b,vec3 c,vec3 d,vec3 e,vec3 f) {
+    // Explicit segments avoid varying array indexing in the palette shader.
+    float p=t*5.0;
+    if(p<1.0)return mix(a,b,p)/255.0;
+    if(p<2.0)return mix(b,c,p-1.0)/255.0;
+    if(p<3.0)return mix(c,d,p-2.0)/255.0;
+    if(p<4.0)return mix(d,e,p-3.0)/255.0;
+    return mix(e,f,p-4.0)/255.0;
 }
+vec3 ramp(float t) {
+    if(palette==1)return vec3(t);
+    if(palette==2)return interpolateStops(t,vec3(0,0,100),vec3(0,90,255),vec3(0,220,180),vec3(190,255,0),vec3(255,140,0),vec3(180,0,0));
+    return interpolateStops(t,vec3(0),vec3(45,0,80),vec3(170,25,70),vec3(245,110,15),vec3(255,220,70),vec3(255));
+}
+
 bool crossAt(ivec2 p, ivec2 origin) {
     ivec2 d=abs(p-origin);return (d.x<=4 && d.y==0)||(d.y<=4 && d.x==0);
 }
@@ -260,7 +267,7 @@ public:
         glUniform2f(glGetUniformLocation(program_,"limits"),lower,upper);
         glUniform1i(glGetUniformLocation(program_,"palette"),frame.display.palette);
         glUniform1i(glGetUniformLocation(program_,"rotation"),rotation);
-        glUniform1i(glGetUniformLocation(program_,"mirrored"),frame.display.mirror);
+        glUniform1i(glGetUniformLocation(program_,"mirrored"),frame.display.mirror != frame.display.preview_mirror);
         glUniform2i(glGetUniformLocation(program_,"minPoint"),frame.min_index%256,frame.min_index/256);
         glUniform2i(glGetUniformLocation(program_,"maxPoint"),frame.max_index%256,frame.max_index/256);
         glBindVertexArray(vao_);glDrawArrays(GL_TRIANGLE_STRIP,0,4);
@@ -362,15 +369,18 @@ void Engine::set_surface(ANativeWindow* window) {
     if (desired_window_) ANativeWindow_release(desired_window_);
     desired_window_=window;++window_generation_;condition_.notify_all();
 }
-void Engine::configure(int palette,bool flip,int rotation,bool mirror,bool automatic,float lower,float upper) {
+void Engine::configure(int palette,bool flip,int rotation,bool mirror,bool automatic,float lower,float upper,bool preview_mirror,int mounting,int screen_rotation) {
+    if (mounting<0 || mounting>2 || screen_rotation<0 || screen_rotation>3) throw std::invalid_argument("Invalid mounting orientation");
     if (palette<0 || palette>2 || rotation<0 || rotation>3 || !std::isfinite(lower) || !std::isfinite(upper) || upper<=lower) throw std::invalid_argument("Invalid display settings");
     std::lock_guard<std::mutex> lock(mutex_);
     // The capture guard also covers display changes: an older queued frame
     // must not be accepted while a new orientation or scale is requested.
     if(settings_.palette!=palette || settings_.flip!=flip || settings_.rotation!=rotation || settings_.mirror!=mirror ||
-       settings_.automatic!=automatic || settings_.lower!=lower || settings_.upper!=upper) ++settings_.measurement_version;
+       settings_.automatic!=automatic || settings_.lower!=lower || settings_.upper!=upper ||
+       settings_.preview_mirror!=preview_mirror || settings_.mounting!=mounting || settings_.screen_rotation!=screen_rotation) ++settings_.measurement_version;
     settings_.palette=palette;settings_.flip=flip;settings_.rotation=rotation;settings_.mirror=mirror;
     settings_.automatic=automatic;settings_.lower=lower;settings_.upper=upper;
+    settings_.preview_mirror=preview_mirror;settings_.mounting=mounting;settings_.screen_rotation=screen_rotation;
 }
 void Engine::correction(double emissivity,double reflected,bool corrected) {
     // Table integration/inversion runs on the command worker, outside the
@@ -378,15 +388,18 @@ void Engine::correction(double emissivity,double reflected,bool corrected) {
     auto table=std::make_shared<p2pro::CorrectionTable>(planck_,emissivity,reflected,corrected);
     std::lock_guard<std::mutex> lock(mutex_);settings_.correction=std::move(table);
 }
-unsigned Engine::geometry(unsigned id,int kind,double x0,double y0,double x1,double y1) {
+unsigned Engine::geometry(unsigned id,int kind,double x0,double y0,double x1,double y1,int expected_rotation,bool expected_mirror) {
     for(double value : {x0,y0,x1,y1})if(!std::isfinite(value)||value<0||value>1)throw std::invalid_argument("Place measurements within the thermal image");
     std::lock_guard<std::mutex> lock(mutex_);
+    if(expected_rotation>=0 && (expected_rotation!=(settings_.rotation+(settings_.flip ? 2:0))%4 ||
+       expected_mirror!=(settings_.mirror != settings_.preview_mirror)))
+        throw std::invalid_argument("Image orientation changed; place the measurement again");
     auto candidate=settings_.measurements;
     unsigned index=candidate.count;
     if(id)for(unsigned i=0;i<candidate.count;++i)if(candidate.geometry[i].id==id){index=i;break;}
     if(id && index==candidate.count)throw std::invalid_argument("Measurement no longer exists");
     if(index==candidate.count){if(candidate.count==p2pro::MaximumMeasurements)throw std::invalid_argument("Maximum 16 measurements; remove one before adding another");++candidate.count;}
-    p2pro::Orientation orientation{unsigned((settings_.rotation+(settings_.flip ? 2:0))%4),settings_.mirror};
+    p2pro::Orientation orientation=p2pro::Orientation{unsigned((settings_.rotation+(settings_.flip ? 2:0))%4),settings_.mirror}.preview(settings_.preview_mirror);
     auto a=orientation.to_sensor({x0,y0}),b=orientation.to_sensor({x1,y1});
     const auto pixel=[](double normalized,int extent){return std::clamp(int(normalized*extent),0,extent-1);};
     auto& g=candidate.geometry[index];g={id ? id:next_geometry_id_,static_cast<p2pro::MeasurementKind>(kind),pixel(a.x,256),pixel(a.y,192),pixel(b.x,256),pixel(b.y,192)};
@@ -726,9 +739,9 @@ std::string Engine::summary(bool include_measurements) {
         <<",\"presentation_latency_ms\":"<<presentation_latency_ms_<<",\"presentation_samples\":"<<presentation_samples_
         <<",\"gain_readback\":"<<last_presented_.gain<<",\"command_active\":"<<(last_presented_.command_active ? "true":"false")
         <<",\"rotation_degrees\":"<<((last_presented_.display.rotation+(last_presented_.display.flip ? 2:0))%4)*90
-        <<",\"mirrored\":"<<(last_presented_.display.mirror ? "true":"false")
+        <<",\"mirrored\":"<<((last_presented_.display.mirror != last_presented_.display.preview_mirror) ? "true":"false")
         <<correction_metadata(last_presented_)
-        <<(include_measurements ? measurement_metadata(last_presented_):std::string{})
+        <<(include_measurements ? measurement_metadata(last_presented_,true):std::string{})
         <<",\"error\":"<<quote(error_)<<",\"identity\":"<<identity_<<'}';return out.str();
 }
 std::vector<std::uint8_t> Engine::dump_frame(){std::lock_guard<std::mutex> lock(mutex_);if(!last_presented_.sequence)throw std::runtime_error("No displayed frame yet");return {last_presented_.composite.begin(),last_presented_.composite.end()};}
@@ -788,6 +801,10 @@ std::vector<std::uint8_t> Engine::capture() {
         <<",\"lower_celsius\":"<<number(frame.display.automatic ? frame.minimum:frame.display.lower)
         <<",\"upper_celsius\":"<<number(frame.display.automatic ? frame.maximum:frame.display.upper)
         <<",\"rotation_degrees\":"<<rotation*90<<",\"mirrored\":"<<(frame.display.mirror ? "true":"false")
+        <<",\"mounting\":"<<quote(frame.display.mounting==2 ? "selfie":frame.display.mounting==1 ? "facing_away":"independent")
+        <<",\"selfie_preview_mirrored\":"<<(frame.display.preview_mirror ? "true":"false")
+        <<",\"preview_mirrored\":"<<((frame.display.mirror != frame.display.preview_mirror) ? "true":"false")
+        <<",\"screen_rotation_degrees\":"<<frame.display.screen_rotation*90
         <<",\"gain_mode\":"<<quote(frame.gain<0 ? "unknown":frame.gain==0 ? "low":"high")
         <<",\"command_active\":"<<(frame.command_active ? "true":"false")
         <<",\"frame_age_at_snapshot_ms\":"<<(monotonic_ns()-frame.callback_ns)/1e6

@@ -59,3 +59,14 @@ adb -s "$PIXEL_ADB" shell am instrument -w -e usb_hardware true \
 Install the matching arm64 debug/test APKs first. The test refuses emulator builds, missing cameras and absent USB permission. It opens using the saved USB gain, the alternate gain, and the saved gain again; verifies gain transitions and capture metadata; sends a NUC command; and counts USB descriptors after logical closure. The first phase includes one minute with eight full-plane boxes, eight full-width lines, isotherm and host correction. Later phases use twelve-second steady intervals. It preserves the saved gain preference and publishes numeric results only; captured pixel packets stay in process memory. Run it separately from other app/device tests.
 
 This exercises logical fd/session ownership, not physical cable detach. ImageReader timings do not establish visible compositor presentation. Command completion plus advancing delivery does not establish a visible shutter freeze or radiometric accuracy. Inspect the result rather than relying only on the shell exit code: the framework runner reports failed assertions in its output.
+
+## Mounting and selfie preview qualification
+
+Use an asymmetric warm/cool target whose top and left can be identified thermally. Record manual Rotate/Flip/Mirror output settings before testing; retain the established mounting offset rather than silently clearing it.
+
+1. With the camera facing away from the screen, select Facing away in Controls → View. At each of the four phone poses, compare normal/full-screen views and enter/exit full screen. Record any scene turn introduced by the transition and whether GUI text is readable.
+2. Mount the camera toward the screen and select Selfie. Both portraits must retain the established upright orientation; both landscapes must avoid the reported inversion. The live preview must reverse left/right.
+3. With Mirror output off, place a spot on the target's asymmetric warm feature and capture in each pose. Inspect the annotated PNG outside the app: the automatic selfie mirror must be absent, and the annotation must identify the same physical feature. Check JSON mounting, preview/output mirror flags and output rotation. Verify original raw words remain in sensor coordinates.
+4. Repeat lock/unlock and manual Rotate/Flip/Mirror output checks. Manual Mirror output is an intentional export transform, separate from the automatic selfie preview mirror.
+
+These physical checks are pending; emulator transform/export checks do not qualify mounting direction or actual on-phone display behavior.

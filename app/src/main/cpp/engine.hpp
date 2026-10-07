@@ -25,6 +25,9 @@ struct DisplaySettings {
     bool flip = false;
     int rotation = 0;
     bool mirror = false;
+    bool preview_mirror = false;
+    int mounting = 0;
+    int screen_rotation = 0;
     bool automatic = true;
     float lower = 20, upper = 30;
     std::shared_ptr<const p2pro::CorrectionTable> correction;
@@ -66,9 +69,9 @@ public:
     Engine();
     ~Engine();
     void set_surface(ANativeWindow* owned_window);
-    void configure(int palette, bool flip, int rotation, bool mirror, bool automatic, float lower, float upper);
+    void configure(int palette, bool flip, int rotation, bool mirror, bool automatic, float lower, float upper, bool preview_mirror = false, int mounting = 0, int screen_rotation = 0);
     void correction(double emissivity, double reflected_celsius, bool corrected);
-    unsigned geometry(unsigned id, int kind, double x0, double y0, double x1, double y1);
+    unsigned geometry(unsigned id, int kind, double x0, double y0, double x1, double y1, int expected_rotation = -1, bool expected_mirror = false);
     void erase_geometry(unsigned id);
     void measurement_options(unsigned first, unsigned second, int isotherm, float lower, float upper);
     std::uint64_t measurement_version();

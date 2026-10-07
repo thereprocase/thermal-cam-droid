@@ -104,24 +104,24 @@ def main():
     tap("View")
     scroll_to("Rotate +90°")
     orientation = next((n.get("text") for n in nodes()
-                        if re.fullmatch(r"(?:0|90|180|270)°(?: · mirrored)?", n.get("text", ""))), None)
+                        if re.fullmatch(r"(?:0|90|180|270)°(?: · preview mirrored)?", n.get("text", ""))), None)
     if orientation is None:
         raise AssertionError("Orientation label is missing")
     degrees = int(orientation.split("°")[0])
-    mirrored = orientation.endswith(" · mirrored")
+    mirrored = orientation.endswith(" · preview mirrored")
 
     def orientation_label(degrees, mirrored):
-        return f"{degrees % 360}°" + (" · mirrored" if mirrored else "")
+        return f"{degrees % 360}°" + (" · preview mirrored" if mirrored else "")
 
     tap("Rotate +90°")
     require(orientation_label(degrees+90, mirrored))
-    tap("Mirror")
+    tap("Mirror output")
     require(orientation_label(degrees+90, not mirrored))
     tap("Flip 180°")
     require(orientation_label(degrees+270, not mirrored))
     # Return orientation to its initial state for subsequent runs.
     tap("Flip 180°")
-    tap("Mirror")
+    tap("Mirror output")
     for _ in range(3):
         tap("Rotate +90°")
     require(orientation)

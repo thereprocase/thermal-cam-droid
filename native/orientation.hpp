@@ -6,6 +6,9 @@ struct Point { double x, y; };
 struct Orientation {
     unsigned quarter_turns = 0;
     bool mirror = false;
+    Orientation preview(bool selfie_mirror) const {
+        return {quarter_turns, mirror != selfie_mirror};
+    }
     Point to_display(Point sensor) const {
         Point result;
         switch(quarter_turns%4) {

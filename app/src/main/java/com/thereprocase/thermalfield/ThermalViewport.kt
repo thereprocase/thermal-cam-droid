@@ -25,7 +25,7 @@ import java.util.Locale
                 override fun surfaceDestroyed(holder: SurfaceHolder) { model.removeSurface(holder.surface) }
             })
         } }, modifier = Modifier.matchParentSize())
-        if (state.frame.frame > 0 && (state.connected || state.fixture || state.archive)) MeasurementOverlay(state, model, ratio, Modifier.matchParentSize(), if (compactScale) scaleHeightPx.toFloat() else 0f)
+        if (state.frame.frame > 0 && state.frame.measurementVersion == state.expectedMeasurementVersion && (state.connected || state.fixture || state.archive)) MeasurementOverlay(state, model, ratio, Modifier.matchParentSize(), if (compactScale) scaleHeightPx.toFloat() else 0f)
         if (state.measurementTool != 0) {
             val tool = when (state.measurementTool) { 1 -> "Spot"; 2 -> "Box"; else -> "Line" }
             Action("$tool · Done", modifier = Modifier.align(Alignment.TopStart).padding(6.dp)) { model.measurementTool(0) }
@@ -60,7 +60,7 @@ import java.util.Locale
             if (horizontalBar >= 56.dp) {
                 Row(Modifier.align(Alignment.BottomCenter).height(horizontalBar).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Action("Rotate +90°", enabled = !state.profileApplying) { model.rotate() }
-                    Action("Mirror", state.mirror, enabled = !state.profileApplying) { model.mirror() }
+                    Action("Mirror output", state.mirror, enabled = !state.profileApplying) { model.mirror() }
                 }
             } else if (verticalBar >= 64.dp) {
                 Column(Modifier.align(Alignment.CenterStart).width(minOf(verticalBar, 140.dp)).padding(4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -106,7 +106,7 @@ import java.util.Locale
                 Action("NUC", enabled = state.connected && !state.busy,
                     accessibilityLabel = "Send NUC shutter command") { model.command(true) }
             }
-            val source = if (state.archive) "SAVED" else if (state.fixture) "DEMO · SYNTHETIC" else if (state.network) "NETWORK" else "USB"
+            val source = if (state.archive) "SAVED" else if (state.fixture) "DEMO · SYNTHETIC" else if (state.network) "NETWORK" else if (state.selfie) "USB · SELFIE" else "USB"
             Label("$source · ${if (state.corrected) "Corrected" else "Apparent"} · ${temperature(state.frame.center, state.fahrenheit)} · ${if (state.measurementTool == 0) "View" else "Measurement tool active"}", size = 12)
             Label(if (state.fixture || state.archive && state.archiveSynthetic) "Synthetic data · not a measurement" else "Accuracy validation pending", size = 10)
             if (state.captureMessage.isNotEmpty()) Label(state.captureMessage, size = 12)

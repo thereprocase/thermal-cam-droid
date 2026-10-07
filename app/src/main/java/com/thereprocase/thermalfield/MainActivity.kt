@@ -282,12 +282,19 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
         }
         val controls: @Composable () -> Unit = {
             if (controlCategory == "View") Pane("ORIENTATION") {
+                if (state.phoneMounted) {
+                    Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Action("Facing away", !state.selfie, enabled = !state.profileApplying) { model.mounting(false) }
+                        Action("Selfie", state.selfie, enabled = !state.profileApplying) { model.mounting(true) }
+                    }
+                    Label(if (state.selfie) "Automatic selfie mirror applies to preview only" else "Camera faces away from the screen", size = 12)
+                }
                 Row(Modifier.fillMaxWidth().background(Light).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Action("Rotate +90°", modifier = Modifier.weight(1f)) { model.rotate() }
-                    Action("Mirror", state.mirror, modifier = Modifier.weight(1f)) { model.mirror() }
+                    Action("Mirror output", state.mirror, modifier = Modifier.weight(1f)) { model.mirror() }
                     Action("Flip 180°", state.flip, modifier = Modifier.weight(1f)) { model.flip() }
                 }
-                Label("${state.renderRotation * 90}°${if (state.mirror) " · mirrored" else ""}", Modifier.padding(horizontal = 12.dp, vertical = 4.dp), mono = true)
+                Label("${state.renderRotation * 90}°${if (state.previewMirrored) " · preview mirrored" else ""}", Modifier.padding(horizontal = 12.dp, vertical = 4.dp), mono = true)
             }
             if (controlCategory == "Measure") MeasurementsPane(state, model) {
                 fun display(value: Float) = if (state.fahrenheit) value * 1.8 + 32 else value.toDouble()
