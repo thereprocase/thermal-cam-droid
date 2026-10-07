@@ -71,4 +71,6 @@ Wireless ADB was subsequently recovered through the already configured Tailscale
 
 - The latest build reopened the four-geometry saved frame, changed its palette to White-hot, returned Home and resumed the viewer. The subsequent export retained White-hot, the original acquisition timestamp, four geometries, ordered delta and the isotherm count. Independent raw/statistic/profile verification passed again. Gallery ordering uses export time while displaying acquisition time, so newly derived exports can become the restored most-recent share item.
 
-Remaining gallery checks: share-chooser handoff, captures with invalid radiance, inaccessible or malformed sidecars, and physical-camera saved frames. File import from another installation is not implemented; the gallery describes this limit explicitly. Reopening source metadata does not establish a verified physical baseline.
+- Sharing the complete saved capture opened Android's chooser with **Sharing 3 files**. Cancelling returned to the saved-frame source with the image/readouts available. No recipient was selected. This checks chooser handoff/recovery, not delivery to another application.
+
+Remaining gallery checks: captures with invalid radiance, inaccessible or malformed sidecars, and physical-camera saved frames. File import from another installation is not implemented; the gallery describes this limit explicitly. Reopening source metadata does not establish a verified physical baseline.
