@@ -71,6 +71,7 @@ class MainActivity : ComponentActivity() {
         else model.message("Local network access denied. Allow Nearby devices in app permissions to connect a LAN camera.")
     }
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        model.cameraPermission(granted, deniedRequest = !granted)
         if (granted) model.connect()
     }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -93,7 +94,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             BackHandler(enabled = state.fullScreen) { model.fullScreen(false) }
-            ThermalScreen(state, model, ::requestCameraPermission, ::connectNetwork, ::share) {
+            ThermalScreen(state, model, ::requestCameraPermission, ::openAppSettings, ::connectNetwork, ::share) {
                 if (requestedNetwork != null) { val address = requestedNetwork!!; requestedNetwork = null; connectNetwork(address) }
                 else if (requestedFixture) { requestedFixture = false; model.fixture() }
             }
@@ -111,15 +112,28 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun requestCameraPermission() {
-        if (checkSelfPermission(Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) cameraPermission.launch(Manifest.permission.CAMERA)
+        val granted = checkSelfPermission(Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        model.cameraPermission(granted)
+        if (!granted) cameraPermission.launch(Manifest.permission.CAMERA)
         else model.connect()
+    }
+    private fun openAppSettings() {
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        } catch (_: android.content.ActivityNotFoundException) {
+            model.message("App settings could not be opened. Open Android Settings → Apps → Thermal Field → Permissions.")
+        }
     }
     private fun connectNetwork(address: String) {
         if (android.os.Build.VERSION.SDK_INT >= 37 && checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             pendingNetwork = address; networkPermission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
         } else model.network(address)
     }
-    override fun onStart() { super.onStart(); model.foreground() }
+    override fun onStart() {
+        super.onStart()
+        model.cameraPermission(checkSelfPermission(Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+        model.foreground()
+    }
     override fun onStop() { model.background(); super.onStop() }
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode in heldCaptureKeys) return true
@@ -185,7 +199,7 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
     return if (displayed.isFinite()) String.format(Locale.US, "%.1f %s", displayed, if (fahrenheit) "°F" else "°C") else "—"
 }
 
-@Composable private fun ThermalScreen(state: CameraUiState, model: CameraViewModel, permission: () -> Unit, connectNetwork: (String) -> Unit, share: (SavedCapture, String) -> Unit, surfaceCreated: () -> Unit) {
+@Composable private fun ThermalScreen(state: CameraUiState, model: CameraViewModel, permission: () -> Unit, settings: () -> Unit, connectNetwork: (String) -> Unit, share: (SavedCapture, String) -> Unit, surfaceCreated: () -> Unit) {
     var sharing by remember { mutableStateOf(false) }
     var galleryDialog by remember { mutableStateOf(false) }
     var sourceDialog by remember { mutableStateOf(false) }
@@ -226,6 +240,12 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
             Label("THERMAL FIELD", color = Color.White, mono = true, size = 18)
             Action("Full screen") { model.fullScreen(true) }
             Action(if (state.archive) "Saved" else if (state.fixture) "Demo" else if (state.network) "Network" else "USB", modifier = Modifier) { sourceDialog = true; model.editing(true) }
+        }
+        if (state.cameraPermissionMissing && !state.fixture && !state.archive && !state.network) {
+            Row(Modifier.fillMaxWidth().background(Light).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Label("USB capture needs Camera access. Enable it in Android permissions.", Modifier.weight(1f), size = 12)
+                Action("App settings", action = settings)
+            }
         }
         val live: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { viewportHeight ->
             Pane(if (state.archive) "SAVED CAPTURE / ORIGINAL FRAME" else if (state.fixture) "DEMO / SYNTHETIC TEMPERATURES" else "RADIOMETRIC VIEW / 256 × 192") {

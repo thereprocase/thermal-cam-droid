@@ -65,6 +65,7 @@ data class CameraUiState(
     val archive: Boolean = false, val archiveSynthetic: Boolean = false,
     val profileApplying: Boolean = false,
     val profileRevision: Long = 0,
+    val cameraPermissionMissing: Boolean = false,
     val gallery: List<CaptureRecord> = emptyList(), val galleryLoading: Boolean = false, val galleryError: String = "",
 )
 
@@ -131,7 +132,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     if (intent.getLongExtra("generation", -1) != generation.get() || !started) return
                     requestedDevice = null
                     if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) open(device)
-                    else mutableState.update { it.copy(status = "USB access denied") }
+                    else mutableState.update { it.copy(status = "USB access denied · tap Connect to ask again", captureMessage = "Allow access in the Android USB dialog to open this camera") }
                 }
             }
         }
@@ -213,6 +214,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun foreground() { started = true; when { archiveSelected != null -> openSaved(archiveSelected!!, restoreSettings = false); networkSelected -> network(state.value.networkUrl); fixtureSelected -> fixture(); else -> connect() } }
+    fun cameraPermission(granted: Boolean, deniedRequest: Boolean = false) {
+        mutableState.update { it.copy(cameraPermissionMissing = !granted,
+            captureMessage = when {
+                deniedRequest -> "Camera access was not granted. USB capture needs it; retry Connect or enable Camera in app settings."
+                granted && it.cameraPermissionMissing -> "Camera access enabled · connect the USB camera"
+                else -> it.captureMessage
+            }) }
+    }
     fun background() { started = false; disconnect("Capture paused", keepSource = true) }
 
     fun surface(surface: Surface?) {
@@ -234,10 +243,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun connect() {
         if (!started || !surfaceReady || networkSelected || archiveSelected != null || state.value.fixture || state.value.connected || state.value.busy || requestedDevice != null) return
         if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            mutableState.update { it.copy(status = "Allow camera access for the USB camera") }; return
+            mutableState.update { it.copy(status = "Camera permission is off · retry Connect or open App settings") }; return
         }
         val device = manager.deviceList.values.firstOrNull { it.isP2Pro() }
-        if (device == null) { mutableState.update { it.copy(status = "Attach camera") }; return }
+        if (device == null) { mutableState.update { it.copy(status = "No supported USB camera found · reseat and tap Connect") }; return }
         if (manager.hasPermission(device)) open(device)
         else {
             requestedDevice = device.deviceName
