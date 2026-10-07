@@ -58,10 +58,16 @@ internal object CaptureStore {
             val imageUri = write(resolver, "$id.png", "image/png", rendered, entries)
             val rawUri = write(resolver, "${id}_raw.png", "image/png", raw, entries)
             val jsonUri = write(resolver, "$id.json", "application/json", metadata.toString(2).toByteArray(), entries)
-            entries.forEach { resolver.update(it, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) }
+            entries.forEach {
+                check(resolver.update(it, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) == 1) {
+                    "Capture file publication was not confirmed"
+                }
+            }
             return SavedCapture(id, imageUri, rawUri, jsonUri, rawPreferred)
         } catch (error: Exception) {
-            entries.forEach { runCatching { resolver.delete(it, null, null) } }
+            val uncertainCleanup = entries.count { uri -> runCatching { resolver.delete(uri, null, null) == 1 }.getOrDefault(false).not() }
+            if (uncertainCleanup > 0) throw IllegalStateException(
+                "${error.message ?: "Capture failed"}; cleanup could not be confirmed for $uncertainCleanup ${if (uncertainCleanup == 1) "file" else "files"} in Downloads/ThermalField", error)
             throw error
         }
     }

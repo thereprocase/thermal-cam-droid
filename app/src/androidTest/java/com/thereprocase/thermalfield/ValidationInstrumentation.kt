@@ -53,6 +53,7 @@ class ValidationInstrumentation : Instrumentation() {
             bridge.archive(engine, frame, originalTime, "fixture", 1, "SYNTHETIC-TEST-FIRMWARE", before, configured)
             awaitFrame(bridge, engine)
             val packet = bridge.capture(engine)
+            validateCaptureFailureCleanup(packet)
             val length = ByteBuffer.wrap(packet, 0, 4).order(ByteOrder.BIG_ENDIAN).int
             val metadata = JSONObject(String(packet, 4, length, Charsets.UTF_8))
             check(metadata.getLong("timestamp_unix_ns") == originalTime)
@@ -101,6 +102,32 @@ class ValidationInstrumentation : Instrumentation() {
             SystemClock.sleep(20)
         }
         error("Native renderer did not present a saved frame within five seconds")
+    }
+
+    private fun validateCaptureFailureCleanup(packet: ByteArray) {
+        for ((provider, expectedInserts) in listOf(FaultCaptureProvider(failWrite = 2) to 2, FaultCaptureProvider(refusePublish = 2) to 3)) {
+            provider.use {
+                var rejected = false
+                try { CaptureStore.save(it.contextFor(targetContext), packet, false, false) }
+                catch (_: Exception) { rejected = true }
+                check(rejected) { "Failed capture was reported as saved" }
+                check(it.inserted == expectedInserts) { "Capture did not reach the intended provider failure" }
+                check(it.entries.keys == setOf(0L)) { "Failed capture left temporary provider entries" }
+                check(0L !in it.deleted && it.deleted.size == it.inserted) { "Cleanup touched an unrelated entry or missed a created entry" }
+            }
+        }
+        FaultCaptureProvider().use {
+            val capture = CaptureStore.save(it.contextFor(targetContext), packet, false, true)
+            check(capture.rawPreferred && it.inserted == 3 && it.deleted.isEmpty())
+            check(it.entries.filterKeys { id -> id != 0L }.values.all { values -> values.getAsInteger(android.provider.MediaStore.MediaColumns.IS_PENDING) == 0 })
+        }
+        FaultCaptureProvider(failWrite = 2, refuseDelete = 1).use {
+            var message = ""
+            try { CaptureStore.save(it.contextFor(targetContext), packet, false, false) }
+            catch (error: Exception) { message = error.message ?: "" }
+            check(message.contains("cleanup could not be confirmed for 1 file")) { "Unconfirmed cleanup was hidden from capture failure" }
+            check(it.entries.keys == setOf(0L, 1L) && 0L !in it.deleted)
+        }
     }
 
     private fun validateQueuedControlCancellation() {
