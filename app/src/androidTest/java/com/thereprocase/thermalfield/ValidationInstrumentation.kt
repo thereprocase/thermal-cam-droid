@@ -2,6 +2,7 @@ package com.thereprocase.thermalfield
 
 import android.app.Activity
 import android.app.Instrumentation
+import android.app.Application
 import android.graphics.PixelFormat
 import android.media.ImageReader
 import android.os.Bundle
@@ -11,6 +12,11 @@ import android.os.SystemClock
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.json.JSONObject
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.TimeUnit
 
 // A framework-only runner exercises Android JSON, MediaStore and the actual
 // native renderer without adding test SDKs to the application dependency set.
@@ -20,7 +26,8 @@ class ValidationInstrumentation : Instrumentation() {
         val result = Bundle()
         try {
             validateSavedProvenance()
-            result.putString("stream", "Native saved provenance, lossless export and MediaStore reopen passed.\n")
+            validateQueuedControlCancellation()
+            result.putString("stream", "Native saved provenance/export and queued control cancellation passed.\n")
             finish(Activity.RESULT_OK, result)
         } catch (error: Throwable) {
             result.putString("stream", "Validation failed: ${error.stackTraceToString()}\n")
@@ -94,5 +101,67 @@ class ValidationInstrumentation : Instrumentation() {
             SystemClock.sleep(20)
         }
         error("Native renderer did not present a saved frame within five seconds")
+    }
+
+    private fun validateQueuedControlCancellation() {
+        val preferences = targetContext.getSharedPreferences("display", android.content.Context.MODE_PRIVATE)
+        val hadAddress = preferences.contains("networkUrl")
+        val originalAddress = preferences.getString("networkUrl", null)
+        val frame = targetContext.assets.open("fixture.yuyv").use { it.readBytes() }
+        val consumer = HandlerThread("ThermalControlValidationSurface").apply { start() }
+        val reader = ImageReader.newInstance(256, 192, PixelFormat.RGBA_8888, 3)
+        reader.setOnImageAvailableListener({ it.acquireLatestImage()?.close() }, Handler(consumer.looper))
+        val store = ViewModelStore()
+        lateinit var model: CameraViewModel
+        var executor: ExecutorService? = null
+        val release = CountDownLatch(1)
+        try {
+            MockRadiometricBridge(frame).use { first -> MockRadiometricBridge(frame).use { second ->
+                runOnMainSync {
+                    val provider = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(targetContext.applicationContext as Application))
+                    model = provider[CameraViewModel::class.java]
+                    model.surface(reader.surface)
+                    model.network(first.address)
+                    model.foreground()
+                }
+                fun awaitConnected(address: String) {
+                    val deadline = SystemClock.elapsedRealtime() + 8000
+                    while (SystemClock.elapsedRealtime() < deadline) {
+                        val state = model.state.value
+                        if (state.networkUrl == address && state.connected && !state.busy && state.frame.received >= 10 && state.frame.frame > 0) return
+                        SystemClock.sleep(20)
+                    }
+                    error("Synthetic network source did not become ready")
+                }
+                awaitConnected(first.address)
+                // Occupy the real command executor to force the queued case;
+                // ordinary gesture timing cannot reliably reproduce this race.
+                val field = CameraViewModel::class.java.getDeclaredField("worker").apply { isAccessible = true }
+                executor = field.get(model) as ExecutorService
+                val blocked = CountDownLatch(1)
+                executor!!.execute { blocked.countDown(); check(release.await(10, TimeUnit.SECONDS)) }
+                check(blocked.await(2, TimeUnit.SECONDS))
+                runOnMainSync { model.command(nuc = true); model.network(second.address) }
+                release.countDown()
+                awaitConnected(second.address)
+                check(first.controls.get() == 0 && second.controls.get() == 0) { "Cancelled queued control reached a bridge" }
+                runOnMainSync { model.command(nuc = false, high = true) }
+                val deadline = SystemClock.elapsedRealtime() + 5000
+                while ((!model.state.value.gainKnown || model.state.value.busy) && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(20)
+                check(first.controls.get() == 0 && second.controls.get() == 1 && model.state.value.gainKnown && !model.state.value.busy) { "Current control did not reach its selected bridge" }
+                runOnMainSync { model.fixture() }
+                val fixtureDeadline = SystemClock.elapsedRealtime() + 5000
+                while ((!model.state.value.fixture || model.state.value.busy || model.state.value.frame.frame == 0L) && SystemClock.elapsedRealtime() < fixtureDeadline) SystemClock.sleep(20)
+                val fixtureState = model.state.value
+                check(fixtureState.fixture && !fixtureState.busy && fixtureState.frame.frame > 0 && !fixtureState.network && !fixtureState.gainKnown) { "Fixture retained a network source or camera gain label" }
+            } }
+        } finally {
+            release.countDown()
+            runOnMainSync { store.clear() }
+            executor?.awaitTermination(5, TimeUnit.SECONDS)
+            preferences.edit().apply { if (hadAddress) putString("networkUrl", originalAddress) else remove("networkUrl") }.commit()
+            reader.setOnImageAvailableListener(null, null)
+            consumer.quitSafely(); consumer.join(2000); reader.close()
+        }
     }
 }

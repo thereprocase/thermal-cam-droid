@@ -255,7 +255,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (!surfaceReady || !started) return
         val token = generation.incrementAndGet()
         bridge.cancel(engine)
-        mutableState.update { it.copy(status = "Fixture replay", fixture = true, connected = false, busy = true, archive = false, serial = "", firmware = "") }
+        mutableState.update { it.copy(status = "Fixture replay", fixture = true, connected = false, busy = true, network = false, archive = false, gainKnown = false, serial = "", firmware = "") }
         worker.execute {
             try {
                 closeConnection()
@@ -308,13 +308,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun command(nuc: Boolean, high: Boolean = true) {
-        if (!state.value.connected || state.value.busy) return
+        val requested = state.value
+        if (!requested.connected || requested.busy) return
         val token = generation.get()
         pendingCommandSession.set(token)
         mutableState.update { it.copy(status = if (nuc) "Calibration command" else "Changing gain", busy = true) }
         worker.execute {
             try {
-                if (state.value.network) NetworkFrames.command(state.value.networkUrl, if (nuc) "nuc" else "gain", high)
+                if (closed || !started || generation.get() != token) return@execute
+                if (requested.network) NetworkFrames.command(requested.networkUrl, if (nuc) "nuc" else "gain", high)
                 else if (nuc) bridge.nuc(engine) else bridge.gain(engine, high)
                 updateSession(token) { it.copy(status = "Live", busy = false,
                     highGain = if (nuc) it.highGain else high, gainKnown = if (nuc) it.gainKnown else true) }

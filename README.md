@@ -10,6 +10,8 @@ An independent, open-source Android thermal viewer for the USB device `0bda:5830
 
 The list describes the latest source. The v0.1.2 development APK includes saved-capture browsing/reanalysis and the foreground session-recovery follow-up.
 
+Source updates after 0.1.2 add queued-command cancellation/target retention and clear inherited network/gain labels when entering Demo. Debug builds of the upcoming version identify as 0.1.3-dev; 0.1.2 release artifacts remain unchanged.
+
 - Native USB capture through Android UsbManager, a borrowed file descriptor, libusb and libuvc. No proprietary camera SDK.
 - GPU rendering of the bottom 256 × 192 radiometric plane; the camera's AGC preview is ignored for display.
 - Ironbow, white-hot and rainbow; center/min/max markers; °C/°F; automatic or manually locked span with deliberate clipping.
@@ -51,7 +53,7 @@ cmake --build build/native
 ctest --test-dir build/native --output-on-failure
 ```
 
-The framework-only Android integration runner exercises native saved-frame rendering, firmware/register provenance, lossless export and MediaStore reopening on a connected device:
+The framework-only Android integration runner exercises native saved-frame rendering, firmware/register provenance, lossless export, MediaStore reopening and queued-control cancellation between synthetic loopback sources on a connected device:
 
 ```sh
 ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest

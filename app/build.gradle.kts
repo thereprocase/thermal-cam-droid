@@ -18,8 +18,8 @@ android {
         applicationId = providers.gradleProperty("validationApplicationId").orElse("com.thereprocase.thermalfield").get()
         minSdk = 36
         targetSdk = 37
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.1.3"
         testInstrumentationRunner = "com.thereprocase.thermalfield.ValidationInstrumentation"
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild {
@@ -36,6 +36,7 @@ android {
         cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" }
     }
     buildFeatures { compose = true; buildConfig = true }
+    buildTypes.getByName("debug").versionNameSuffix = "-dev"
     if (releaseSigning.isNotEmpty()) {
         signingConfigs.create("projectRelease") {
             storeFile = rootProject.file(releaseSigning.getProperty("storeFile"))
