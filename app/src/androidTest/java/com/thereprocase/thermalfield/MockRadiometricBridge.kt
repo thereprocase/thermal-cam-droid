@@ -19,6 +19,8 @@ internal class MockRadiometricBridge(private val frame: ByteArray) : AutoCloseab
     val controlStatus = AtomicInteger(204)
     val streams = AtomicInteger(0)
     val paused = AtomicBoolean(false)
+    val pauseAcknowledged = AtomicBoolean(false)
+    val latestFramesWritten = AtomicInteger(0)
     val address = "http://127.0.0.1:${listener.localPort}/radiometric"
     private val accepting = Thread({
         while (!stopped.get()) {
@@ -41,15 +43,21 @@ internal class MockRadiometricBridge(private val frame: ByteArray) : AutoCloseab
                 output.write("HTTP/1.1 $status ${if (status == 204) "No Content" else "Service Unavailable"}\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
                 output.flush()
             } else if (request.startsWith("GET /radiometric ")) {
-                streams.incrementAndGet()
+                val streamId = streams.incrementAndGet()
+                latestFramesWritten.set(0)
                 output.write(("HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=thermal-field\r\n" +
                     "X-Thermal-Protocol: thermal-field-v1\r\nX-Thermal-Format: yuyv-256x384-u16le-k64\r\nConnection: close\r\n\r\n").toByteArray(Charsets.US_ASCII))
                 var sequence = 0L
                 while (!stopped.get()) {
-                    if (paused.get()) { Thread.sleep(20); continue }
+                    if (paused.get()) {
+                        if (streams.get() == streamId) pauseAcknowledged.set(true)
+                        Thread.sleep(20); continue
+                    }
+                    if (streams.get() == streamId) pauseAcknowledged.set(false)
                     val header = "--thermal-field\r\nContent-Type: application/octet-stream\r\nContent-Length: 196608\r\nX-Frame-Number: ${++sequence}\r\n\r\n"
                     output.write(header.toByteArray(Charsets.US_ASCII)); output.write(frame)
                     output.write(byteArrayOf(13, 10)); output.flush()
+                    if (streams.get() == streamId) latestFramesWritten.set(sequence.toInt())
                     Thread.sleep(40)
                 }
             }

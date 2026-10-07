@@ -914,9 +914,19 @@ class ValidationInstrumentation : Instrumentation() {
                 check(model.state.value.frame.received > stalled.received && model.state.value.frame.ageMs < 300) { "Frame delivery did not recover after a bounded synthetic pause" }
                 val previousStreams = first.streams.get()
                 first.paused.set(true)
+                val pauseAckDeadline = SystemClock.elapsedRealtime()+5000
+                while (!first.pauseAcknowledged.get() && SystemClock.elapsedRealtime()<pauseAckDeadline) SystemClock.sleep(20)
+                check(first.pauseAcknowledged.get()) { "Mock producer did not acknowledge its pause" }
+                val written = first.latestFramesWritten.get()
+                val deliveryDrainDeadline = SystemClock.elapsedRealtime()+5000
+                while (model.state.value.frame.received < written && SystemClock.elapsedRealtime()<deliveryDrainDeadline) SystemClock.sleep(20)
+                check(model.state.value.frame.received >= written) { "Already-written mock frames did not reach the receiver before stall timing" }
                 val recoveryDeadline = SystemClock.elapsedRealtime()+6000
                 while (!canRestartStalledSource(model.state.value) && SystemClock.elapsedRealtime() < recoveryDeadline) SystemClock.sleep(20)
-                check(canRestartStalledSource(model.state.value)) { "Prolonged synthetic stall did not expose recovery" }
+                check(canRestartStalledSource(model.state.value)) {
+                    val state = model.state.value
+                    "Prolonged synthetic stall did not expose recovery: connected=${state.connected}, busy=${state.busy}, age=${state.frame.ageMs}, profile=${state.profileApplying}, saving=${state.saving}, error=${state.frame.error}, status=${state.status}"
+                }
                 runOnMainSync { model.restartStalledSource() }
                 val reopenDeadline = SystemClock.elapsedRealtime()+6000
                 while (first.streams.get() == previousStreams && SystemClock.elapsedRealtime() < reopenDeadline) SystemClock.sleep(20)

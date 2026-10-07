@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.util.Locale
 
 private fun imageBounds(width: Float, height: Float, ratio: Float): FloatArray {
@@ -23,10 +24,10 @@ private fun imageBounds(width: Float, height: Float, ratio: Float): FloatArray {
     return floatArrayOf((width - w) / 2, (height - h) / 2, w, h)
 }
 
-@Composable internal fun MeasurementOverlay(state: CameraUiState, model: CameraViewModel, ratio: Float, modifier: Modifier) {
+@Composable internal fun MeasurementOverlay(state: CameraUiState, model: CameraViewModel, ratio: Float, modifier: Modifier, reservedBottomPx: Float = 0f) {
     var start by remember { mutableStateOf<Offset?>(null) }; var end by remember { mutableStateOf<Offset?>(null) }
     val context = LocalContext.current
-    val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = context.resources.getFont(R.font.plex_mono_regular); textSize = 26f } }
+    val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = context.resources.getFont(R.font.plex_mono_regular) } }
     val tool = state.measurementTool
     val gesture = if (tool == 1) Modifier.pointerInput(tool, state.selectedMeasurement, ratio) {
         detectTapGestures { offset ->
@@ -63,15 +64,61 @@ private fun imageBounds(width: Float, height: Float, ratio: Float): FloatArray {
     Canvas(modifier.then(gesture)) {
         val bounds = imageBounds(size.width, size.height, ratio)
         fun display(p: Offset) = Offset(bounds[0] + p.x * bounds[2], bounds[1] + p.y * bounds[3])
-        for (measurement in state.frame.measurements) {
-            val p = display(Offset(measurement.x0.toFloat(), measurement.y0.toFloat()))
-            val label = "${measurement.label} ${temperature(measurement.average, state.fahrenheit)}"
-            val x = (p.x + 10).coerceIn(bounds[0] + 4, maxOf(bounds[0] + 4, bounds[0] + bounds[2] - paint.measureText(label) - 4))
-            val y = (p.y - 10).coerceIn(bounds[1] + 30, bounds[1] + bounds[3] - 4)
-            paint.color = android.graphics.Color.argb(210, 0, 0, 0)
-            drawContext.canvas.nativeCanvas.drawRect(x - 4, y - 27, x + paint.measureText(label) + 4, y + 5, paint)
+        paint.textSize = 12.sp.toPx()
+        val metrics = paint.fontMetrics
+        val padding = 3.dp.toPx()
+        val labelHeight = metrics.descent-metrics.ascent+padding*2
+        val scaleHeight = reservedBottomPx
+        val area = LabelRect(bounds[0]+padding,bounds[1]+padding,bounds[0]+bounds[2]-padding,bounds[1]+bounds[3]-scaleHeight-padding)
+        val labels = state.frame.measurements.map { measurement ->
+            display(Offset(measurement.x0.toFloat(), measurement.y0.toFloat())) to
+                "${measurement.label}${if (measurement.kind == 1) "" else " AVG"} ${temperature(measurement.average, state.fahrenheit)}"
+        }
+        fun layout(region: LabelRect): List<LabelRect?> {
+            val occupied = mutableListOf<LabelRect>()
+            return labels.map { (anchor,text) ->
+                placeLabel(region,paint.measureText(text)+padding*2,labelHeight,anchor.x,anchor.y,occupied,padding)
+                    .also { if (it != null) occupied += it }
+            }
+        }
+        var rectangles = layout(area)
+        if (rectangles.any { it == null }) {
+            // Reserve the notice row only when readable labels cannot all fit.
+            rectangles = layout(area.copy(top = area.top+labelHeight+padding))
+        }
+        val hidden = rectangles.count { it == null }
+        for ((index,entry) in labels.withIndex()) {
+            val p = entry.first
+            val rectangle = rectangles[index] ?: continue
+            val canvas = drawContext.canvas.nativeCanvas
+            val endX = p.x.coerceIn(rectangle.left,rectangle.right)
+            val endY = p.y.coerceIn(rectangle.top,rectangle.bottom)
+            // Displaced labels retain an explicit link to their sensor anchor;
+            // contrast comes from paired strokes rather than palette color.
+            paint.color = android.graphics.Color.BLACK; paint.strokeWidth = 3.dp.toPx()
+            canvas.drawLine(p.x,p.y,endX,endY,paint)
+            paint.color = android.graphics.Color.WHITE; paint.strokeWidth = 1.dp.toPx()
+            canvas.drawLine(p.x,p.y,endX,endY,paint)
+        }
+        // Draw every leader before any label, so later leaders cannot cross
+        // previously painted text in dense layouts.
+        for ((index,entry) in labels.withIndex()) {
+            val rectangle = rectangles[index] ?: continue
+            paint.color = android.graphics.Color.argb(210,0,0,0)
+            drawContext.canvas.nativeCanvas.drawRect(rectangle.left,rectangle.top,rectangle.right,rectangle.bottom,paint)
             paint.color = android.graphics.Color.WHITE
-            drawContext.canvas.nativeCanvas.drawText(label, x, y, paint)
+            drawContext.canvas.nativeCanvas.drawText(entry.second,rectangle.left+padding,rectangle.top+padding-metrics.ascent,paint)
+        }
+        if (hidden > 0) {
+            // A small viewport cannot fit every readable label. Keep the
+            // measurement values in the panel and disclose the omission.
+            val notice = "$hidden labels hidden · Controls → Measure"
+            val x = bounds[0]+padding
+            val baseline = bounds[1]+padding-metrics.ascent
+            paint.color = android.graphics.Color.argb(230,0,0,0)
+            drawContext.canvas.nativeCanvas.drawRect(x-padding,bounds[1],minOf(size.width,x+paint.measureText(notice)+padding),baseline+metrics.descent+padding,paint)
+            paint.color = android.graphics.Color.WHITE
+            drawContext.canvas.nativeCanvas.drawText(notice,x,baseline,paint)
         }
         val a = start; val b = end
         if (a != null && b != null) {

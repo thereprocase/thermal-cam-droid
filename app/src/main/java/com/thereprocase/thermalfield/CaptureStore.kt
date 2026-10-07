@@ -134,7 +134,7 @@ internal object CaptureStore {
         fun measurementName(item: JSONObject) = "${when (item.getString("kind")) { "spot" -> "P"; "box" -> "B"; else -> "L" }}${item.getInt("id")}"
         for (index in 0 until (measurements?.length() ?: 0)) {
             val item = measurements!!.getJSONObject(index)
-            drawLabel("${measurementName(item)} ${temperature(item.optDouble("average_celsius", Double.NaN))}", item.getJSONArray("display_start"))
+            drawLabel("${measurementName(item)}${if (item.getString("kind") == "spot") "" else " AVG"} ${temperature(item.optDouble("average_celsius", Double.NaN))}", item.getJSONArray("display_start"))
         }
         paint.color = Color.rgb(16, 16, 16)
         val row = height * scale + 34f

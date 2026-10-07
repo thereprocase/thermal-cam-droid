@@ -52,3 +52,13 @@ python3 tools/check_emulator_orientation.py --adb "$ANDROID_SDK_ROOT/platform-to
 ```
 
 This injects four accelerometer directions through the emulator console, checks that full screen requests `fullSensor`, observes all four display rotations, and checks screen-lock/unlock behavior. It restores upright acceleration and exits full screen afterward. Run it separately from the UI checker and integration runner; these checks share the emulator activity. It does not establish the physical camera mounting offset on a phone.
+
+## Dense annotation and text-scale inspection
+
+```sh
+python3 tools/check_emulator_annotation_labels.py --adb "$ANDROID_SDK_ROOT/platform-tools/adb" --serial emulator-5556
+```
+
+This emulator-only check seeds sixteen synthetic, densely anchored measurements, sets text scale to 1.5, waits for portrait/landscape activity layouts and saves screenshots under `/tmp/thermal-annotation-check`. Inspect the screenshots; artifact generation alone is not a visual pass. It restores preferences, text scale and rotation settings. A private recovery record is retained until restoration completes and used on the next run after interruption. Do not publish that preference record.
+
+Host-GPU rotation testing produced a segmentation-fault exit in one run. For the recorded software-graphics fallback, the entire emulator process was pinned to two host CPU cores with `taskset -c 0,1`, alongside `-cores 2 -gpu swiftshader`. This limits workstation load; it is not a production performance configuration or a claim about other hosts.

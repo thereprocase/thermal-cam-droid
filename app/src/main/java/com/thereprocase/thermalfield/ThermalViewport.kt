@@ -4,7 +4,9 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -13,6 +15,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import java.util.Locale
 
 @Composable internal fun ThermalViewport(state: CameraUiState, model: CameraViewModel, ratio: Float, modifier: Modifier, surfaceCreated: () -> Unit, compactScale: Boolean = false) {
+    var scaleHeightPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
     BoxWithConstraints(modifier) {
         AndroidView(factory = { context -> SurfaceView(context).apply {
             holder.addCallback(object : SurfaceHolder.Callback {
@@ -21,7 +25,7 @@ import java.util.Locale
                 override fun surfaceDestroyed(holder: SurfaceHolder) { model.removeSurface(holder.surface) }
             })
         } }, modifier = Modifier.matchParentSize())
-        if (state.frame.frame > 0 && (state.connected || state.fixture || state.archive)) MeasurementOverlay(state, model, ratio, Modifier.matchParentSize())
+        if (state.frame.frame > 0 && (state.connected || state.fixture || state.archive)) MeasurementOverlay(state, model, ratio, Modifier.matchParentSize(), if (compactScale) scaleHeightPx.toFloat() else 0f)
         if (state.measurementTool != 0) {
             val tool = when (state.measurementTool) { 1 -> "Spot"; 2 -> "Box"; else -> "Line" }
             Action("$tool · Done", modifier = Modifier.align(Alignment.TopStart).padding(6.dp)) { model.measurementTool(0) }
@@ -34,7 +38,9 @@ import java.util.Locale
             val valid = state.frame.frame > 0 && (state.connected || state.fixture || state.archive) && state.frame.error.isEmpty()
             val lower = if (state.automatic) state.frame.minimum else state.lower.toDouble()
             val upper = if (state.automatic) state.frame.maximum else state.upper.toDouble()
-            Column(Modifier.offset(x = verticalBar, y = horizontalBar+maxOf(0.dp, imageHeight-(if (state.automatic) 48.dp else 68.dp))).width(imageWidth).background(Light.copy(alpha = .90f)).padding(horizontal = 6.dp, vertical = 2.dp)) {
+            val scaleHeight = with(density) { scaleHeightPx.toDp() }
+            Column(Modifier.offset(x = verticalBar, y = horizontalBar+maxOf(0.dp, imageHeight-scaleHeight)).width(imageWidth)
+                .onSizeChanged { scaleHeightPx = it.height }.background(Light.copy(alpha = .90f)).padding(horizontal = 6.dp, vertical = 2.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Label("MIN ${if (valid) temperature(state.frame.minimum, state.fahrenheit) else "—"}", mono = true, size = 11)
                     Label("C ${if (valid) temperature(state.frame.center, state.fahrenheit) else "—"}", mono = true, size = 11)
