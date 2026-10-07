@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -71,6 +72,8 @@ public:
     void erase_geometry(unsigned id);
     void measurement_options(unsigned first, unsigned second, int isotherm, float lower, float upper);
     std::uint64_t measurement_version();
+    void begin_saved_profile();
+    std::string restore_live_profile();
     std::string open(int borrowed_fd);
     void replay(const std::vector<std::uint8_t>& composite);
     void archive(const std::vector<std::uint8_t>& composite, std::int64_t timestamp, const std::string& original_source, int gain,
@@ -102,6 +105,8 @@ private:
     unsigned queue_head_ = 0, queue_tail_ = 0, queue_size_ = 0;
     Frame last_presented_;
     DisplaySettings settings_;
+    std::optional<DisplaySettings> live_profile_;
+    unsigned live_next_geometry_id_ = 1;
     p2pro::BandPlanckTable planck_;
     unsigned next_geometry_id_ = 1;
     ANativeWindow* desired_window_ = nullptr;

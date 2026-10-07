@@ -205,6 +205,14 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
     var licenseText by remember { mutableStateOf("") }
     val context = LocalContext.current
     val licenseFiles = remember { context.assets.list("licenses")?.sorted() ?: emptyList() }
+    LaunchedEffect(state.profileRevision) {
+        // A lasting revision also catches a transition shorter than a Compose
+        // frame, so archive dialog inputs do not later apply to the live survey.
+        spanDialog = false
+        correctionDialog = false
+        isothermDialog = false
+        model.editing(false)
+    }
     LaunchedEffect(licenseDialog, licenseFile) {
         if (licenseDialog && licenseFile in licenseFiles) {
             licenseText = "Loading…"
@@ -327,6 +335,14 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                 Action("Licenses and notices", modifier = Modifier.padding(12.dp)) { licenseFile = ""; licenseDialog = true; model.editing(true) }
             }
         }
+        val profileControls: @Composable () -> Unit = {
+            if (state.profileApplying) {
+                Pane("SURVEY PROFILE") {
+                    Label("Applying survey settings…", Modifier.padding(12.dp), mono = true)
+                    if (state.captureMessage.isNotEmpty()) Label(state.captureMessage, Modifier.padding(12.dp))
+                }
+            } else controls()
+        }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val availableHeight = maxHeight
             if (maxWidth > maxHeight) {
@@ -334,14 +350,14 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                     Column(Modifier.weight(0.56f)) { live(maxOf(40.dp, availableHeight - 165.dp)) }
                     Column(Modifier.weight(0.44f)) {
                         MeasurementToolbar(state, model)
-                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { controls() }
+                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { profileControls() }
                     }
                 }
             } else {
                 Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MeasurementToolbar(state, model)
                     live(maxOf(100.dp, availableHeight * 0.35f))
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { controls() }
+                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { profileControls() }
                 }
             }
         }

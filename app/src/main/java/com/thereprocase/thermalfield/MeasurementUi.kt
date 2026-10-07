@@ -85,7 +85,7 @@ private fun imageBounds(width: Float, height: Float, ratio: Float): FloatArray {
 @Composable internal fun MeasurementToolbar(state: CameraUiState, model: CameraViewModel) {
     Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         listOf("View", "Spot", "Box", "Line").forEachIndexed { index, label ->
-            Action(label, state.measurementTool == index, modifier = Modifier.weight(1f)) { model.measurementTool(index) }
+            Action(label, state.measurementTool == index, enabled = !state.profileApplying, modifier = Modifier.weight(1f)) { model.measurementTool(index) }
         }
     }
     if (state.measurementTool != 0) Label("${if (state.selectedMeasurement == 0) "Place" else "Replace ${state.selectedMeasurement}"} ${if (state.measurementTool == 1) "spot: tap image" else "${if (state.measurementTool == 2) "box" else "line"}: drag image"}", Modifier.padding(horizontal = 10.dp), mono = true, size = 12)

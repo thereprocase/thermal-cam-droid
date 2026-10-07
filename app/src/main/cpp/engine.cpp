@@ -404,6 +404,41 @@ void Engine::measurement_options(unsigned first,unsigned second,int isotherm,flo
     settings_.measurements=candidate;++settings_.measurement_version;
 }
 std::uint64_t Engine::measurement_version(){std::lock_guard<std::mutex> lock(mutex_);return settings_.measurement_version;}
+void Engine::begin_saved_profile() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Archive-to-archive navigation keeps the original survey, including its
+    // immutable LUT and sensor geometry, rather than backing up an archive.
+    if (!live_profile_) {
+        live_profile_ = settings_;
+        live_next_geometry_id_ = next_geometry_id_;
+    }
+}
+std::string Engine::restore_live_profile() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (live_profile_) {
+        const auto version = settings_.measurement_version;
+        settings_ = *live_profile_;
+        settings_.measurement_version = std::max(version, settings_.measurement_version) + 1;
+        next_geometry_id_ = live_next_geometry_id_;
+        live_profile_.reset();
+    }
+    const auto& s = settings_;
+    const auto& m = s.measurements;
+    const auto& c = *s.correction;
+    std::ostringstream out;
+    out << std::setprecision(12) << "{\"palette\":" << s.palette
+        << ",\"flip\":" << (s.flip ? "true" : "false") << ",\"rotation\":" << s.rotation
+        << ",\"mirror\":" << (s.mirror ? "true" : "false")
+        << ",\"automatic\":" << (s.automatic ? "true" : "false")
+        << ",\"lower\":" << s.lower << ",\"upper\":" << s.upper
+        << ",\"emissivity\":" << c.emissivity << ",\"reflected\":" << c.reflected_celsius
+        << ",\"corrected\":" << (c.corrected ? "true" : "false")
+        << ",\"delta_first\":" << m.delta_first << ",\"delta_second\":" << m.delta_second
+        << ",\"isotherm_mode\":" << (m.isotherm_enabled ? static_cast<int>(m.isotherm_mode) : 0)
+        << ",\"isotherm_lower\":" << m.isotherm_lower << ",\"isotherm_upper\":" << m.isotherm_upper
+        << ",\"measurement_version\":" << s.measurement_version << '}';
+    return out.str();
+}
 void Engine::cancel() {cancelled_=true;condition_.notify_all();}
 void Engine::close_session() {
     cancelled_=true;

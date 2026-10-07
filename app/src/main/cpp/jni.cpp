@@ -29,6 +29,13 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(restoreMeasurements)(JNIEnv* env,jo
 extern "C" JNIEXPORT jlong JNICALL JNI_METHOD(measurementVersion)(JNIEnv* env,jobject,jlong id) {
     try{return engine(id)->measurement_version();}catch(const std::exception& e){fail(env,e);return 0;}
 }
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(beginSavedProfile)(JNIEnv* env,jobject,jlong id) {
+    try { engine(id)->begin_saved_profile(); } catch (const std::exception& e) { fail(env,e); }
+}
+extern "C" JNIEXPORT jstring JNICALL JNI_METHOD(restoreLiveProfile)(JNIEnv* env,jobject,jlong id) {
+    try { return env->NewStringUTF(engine(id)->restore_live_profile().c_str()); }
+    catch (const std::exception& e) { fail(env,e); return nullptr; }
+}
 extern "C" JNIEXPORT jint JNICALL JNI_METHOD(geometry)(JNIEnv* env,jobject,jlong id,jint measurement,jint kind,jdouble x0,jdouble y0,jdouble x1,jdouble y1) {
     try{return engine(id)->geometry(measurement,kind,x0,y0,x1,y1);}catch(const std::exception& e){fail(env,e);return 0;}
 }

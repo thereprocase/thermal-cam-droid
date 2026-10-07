@@ -29,13 +29,182 @@ class ValidationInstrumentation : Instrumentation() {
             validateSavedProvenance()
             validateQueuedControlCancellation()
             validateCaptureDuringGalleryWork()
+            validateSavedLiveProfiles()
             val workload = if (measurementWorkload) validateMeasurementWorkload().toString() else null
-            result.putString("stream", "Native saved provenance/export, queued control cancellation and capture/gallery isolation passed.\n" +
+            result.putString("stream", "Native saved provenance/export, queued control cancellation, capture/gallery isolation and saved/live profile isolation passed.\n" +
                 if (workload != null) "Synthetic workload: $workload\n" else "")
             finish(Activity.RESULT_OK, result)
         } catch (error: Throwable) {
             result.putString("stream", "Validation failed: ${error.stackTraceToString()}\n")
             finish(Activity.RESULT_CANCELED, result)
+        }
+    }
+
+    private fun validateSavedLiveProfiles() {
+        val preferences = targetContext.getSharedPreferences("display", android.content.Context.MODE_PRIVATE)
+        val keys = listOf("palette", "flip", "rotation", "mirror", "automatic", "lower", "upper", "emissivity", "reflectedCelsius", "corrected", "networkUrl")
+        val originalPreferences = preferences.all.filterKeys { it in keys }
+        val consumer = HandlerThread("ThermalProfileValidationSurface").apply { start() }
+        val reader = ImageReader.newInstance(256, 192, PixelFormat.RGBA_8888, 3)
+        reader.setOnImageAvailableListener({ it.acquireLatestImage()?.close() }, Handler(consumer.looper))
+        val store = ViewModelStore()
+        val temporary = mutableListOf<SavedCapture>()
+        var capturePending = false
+        var capturePrevious: SavedCapture? = null
+        var model: CameraViewModel? = null
+        val executors = mutableListOf<ExecutorService>()
+        try {
+            lateinit var active: CameraViewModel
+            runOnMainSync {
+                active = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(targetContext.applicationContext as Application))[CameraViewModel::class.java]
+                model = active
+                active.surface(reader.surface)
+                active.fixture()
+                active.foreground()
+            }
+            for (name in listOf("worker", "correctionWorker", "captureWorker", "galleryWorker")) {
+                executors += CameraViewModel::class.java.getDeclaredField(name).apply { isAccessible = true }.get(active) as ExecutorService
+            }
+            fun awaitReady(predicate: (CameraUiState) -> Boolean = { true }) {
+                val deadline = SystemClock.elapsedRealtime() + 8000
+                while (SystemClock.elapsedRealtime() < deadline) {
+                    if (active.canCapture() && predicate(active.state.value)) return
+                    SystemClock.sleep(20)
+                }
+                val state = active.state.value
+                error("Profile did not become ready: ${state.status}, epsilon=${state.emissivity}, geometries=${state.frame.measurements.size}, archive=${state.archive}, applying=${state.profileApplying}, ${active.captureRefusalReason()}")
+            }
+            fun configure(palette: Int, rotation: Int, flip: Boolean, mirror: Boolean, epsilon: Double, reflected: Double, automatic: Boolean, lower: Float, upper: Float) {
+                runOnMainSync {
+                    check(!active.state.value.profileApplying)
+                    active.palette(palette)
+                    repeat((rotation-active.state.value.rotation+4)%4) { active.rotate() }
+                    if (active.state.value.flip != flip) active.flip()
+                    if (active.state.value.mirror != mirror) active.mirror()
+                    active.span(automatic, lower, upper)
+                    active.correction(epsilon, reflected, true)
+                }
+                awaitReady { kotlin.math.abs(it.emissivity-epsilon) < 1e-6 && it.corrected }
+            }
+            fun capture(): SavedCapture {
+                val previous = active.state.value.lastCapture
+                capturePrevious = previous
+                capturePending = true
+                runOnMainSync { active.capture() }
+                val deadline = SystemClock.elapsedRealtime() + 8000
+                while (SystemClock.elapsedRealtime() < deadline) {
+                    val state = active.state.value
+                    if (!state.saving && state.lastCapture != null && state.lastCapture != previous) {
+                        capturePending = false
+                        return state.lastCapture.also { temporary += it }
+                    }
+                    SystemClock.sleep(20)
+                }
+                error("Profile fixture capture did not finish: ${active.state.value.captureMessage}")
+            }
+            val native = CameraViewModel::class.java.getDeclaredField("bridge").apply { isAccessible = true }.get(active) as NativeBridge
+            val engine = CameraViewModel::class.java.getDeclaredField("engine").apply { isAccessible = true }.getLong(active)
+            fun snapshot(): JSONObject {
+                val packet = native.snapshot(engine)
+                val length = ByteBuffer.wrap(packet, 0, 4).order(ByteOrder.BIG_ENDIAN).int
+                return JSONObject(String(packet, 4, length, Charsets.UTF_8))
+            }
+            fun topology(metadata: JSONObject): String {
+                val geometry = metadata.getJSONArray("measurements")
+                return (0 until geometry.length()).joinToString(";") { index ->
+                    val g = geometry.getJSONObject(index)
+                    "${g.getInt("id")}:${g.getString("kind")}:${g.getJSONArray("sensor_start")}:${g.getJSONArray("sensor_end")}"
+                }
+            }
+            awaitReady()
+            configure(2, 2, false, true, .96, 20.0, true, 20f, 30f)
+            val first = capture()
+            configure(0, 0, false, false, .8, 40.0, false, 20f, 30f)
+            runOnMainSync { active.measurementTool(1); active.placeMeasurement(.3, .4, .3, .4) }
+            awaitReady { it.frame.measurements.size == 1 }
+            val second = capture()
+            configure(1, 1, true, true, .93, -10.0, false, -20f, 60f)
+            runOnMainSync {
+                active.deleteMeasurement(0)
+                active.measurementTool(1)
+                active.placeMeasurement(.2, .3, .2, .3)
+                active.placeMeasurement(.7, .6, .7, .6)
+                active.measurementTool(2)
+                active.placeMeasurement(.3, .35, .4, .45)
+                active.measurementTool(3)
+                active.placeMeasurement(.1, .2, .8, .7)
+            }
+            awaitReady { it.frame.measurements.size == 4 }
+            val ids = active.state.value.frame.measurements.map { it.id }
+            runOnMainSync { active.measurementOptions(ids[0], ids[1], 1, 14f, 32f) }
+            awaitReady()
+            val live = snapshot()
+            val livePreferences = preferences.all.filterKeys { it in keys }
+            runOnMainSync { active.openSaved(first) }
+            awaitReady { it.archive && it.palette == 2 && kotlin.math.abs(it.emissivity-.96) < 1e-6 && it.frame.measurements.isEmpty() }
+            configure(0, 3, true, false, .7, 55.0, false, 5f, 45f)
+            check(preferences.all.filterKeys { it in keys } == livePreferences) { "Archive edits changed live preferences" }
+            runOnMainSync { active.background(); active.foreground() }
+            awaitReady { it.archive && kotlin.math.abs(it.emissivity-.7) < 1e-6 && it.palette == 0 }
+            runOnMainSync { active.openSaved(second) }
+            awaitReady { it.archive && it.frame.measurements.size == 1 && kotlin.math.abs(it.emissivity-.8) < 1e-6 }
+            check(preferences.all.filterKeys { it in keys } == livePreferences)
+            runOnMainSync { active.fixture() }
+            awaitReady { it.fixture && !it.archive && !it.profileApplying && it.frame.measurements.size == 4 }
+            val restored = snapshot()
+            for (key in listOf("palette", "rotation_degrees", "mirrored", "automatic_span", "correction_applied")) {
+                check(restored.get(key) == live.get(key)) { "Live profile field changed: $key" }
+            }
+            for (key in listOf("emissivity", "reflected_apparent_celsius", "lower_celsius", "upper_celsius")) {
+                check(kotlin.math.abs(restored.getDouble(key)-live.getDouble(key)) < 1e-6) { "Live numeric field changed: $key" }
+            }
+            check(topology(restored) == topology(live)) { "Live sensor geometry was replaced by archive geometry" }
+            check(restored.getJSONObject("delta_t").getInt("first") == ids[0] && restored.getJSONObject("delta_t").getInt("second") == ids[1])
+            check(restored.getJSONObject("isotherm").toString() == live.getJSONObject("isotherm").toString())
+            check(active.state.value.rotation == 1 && active.state.value.flip && active.state.value.mirror)
+            check(preferences.all.filterKeys { it in keys } == livePreferences)
+            runOnMainSync { active.openSaved(first); active.fixture() }
+            awaitReady { it.fixture && !it.archive && !it.profileApplying && it.frame.measurements.size == 4 }
+            check(topology(snapshot()) == topology(live)) { "Cancelled saved load changed live geometry" }
+            check(kotlin.math.abs(active.state.value.emissivity-.93) < 1e-6)
+            MockRadiometricBridge(targetContext.assets.open("fixture.yuyv").use { it.readBytes() }).use { network ->
+                runOnMainSync { active.network(network.address) }
+                awaitReady { it.network && it.frame.measurements.size == 4 }
+                runOnMainSync { active.openSaved(first) }
+                awaitReady { it.archive && kotlin.math.abs(it.emissivity-.96) < 1e-6 }
+                runOnMainSync { active.network(network.address) }
+                awaitReady { it.network && !it.archive && it.frame.measurements.size == 4 }
+                check(topology(snapshot()) == topology(live))
+                check(kotlin.math.abs(active.state.value.emissivity-.93) < 1e-6)
+                runOnMainSync { active.openSaved(second) }
+                awaitReady { it.archive && it.frame.measurements.size == 1 }
+                runOnMainSync { active.disconnect() }
+                val restoredDeadline = SystemClock.elapsedRealtime() + 8000
+                while (active.state.value.profileApplying && SystemClock.elapsedRealtime() < restoredDeadline) SystemClock.sleep(20)
+                check(!active.state.value.profileApplying && kotlin.math.abs(active.state.value.emissivity-.93) < 1e-6)
+                runOnMainSync { active.fixture() }
+                awaitReady { it.fixture && it.frame.measurements.size == 4 }
+                check(topology(snapshot()) == topology(live))
+            }
+        } finally {
+            runOnMainSync { store.clear() }
+            executors.forEach { it.awaitTermination(5, TimeUnit.SECONDS) }
+            val late = model?.state?.value?.lastCapture
+            if (capturePending && late != null && late != capturePrevious && late !in temporary) temporary += late
+            temporary.forEach { capture -> listOf(capture.rendered, capture.raw, capture.metadata).forEach { targetContext.contentResolver.delete(it, null, null) } }
+            preferences.edit().apply {
+                for (key in keys) {
+                    when (val value = originalPreferences[key]) {
+                        is Int -> putInt(key, value)
+                        is Float -> putFloat(key, value)
+                        is Boolean -> putBoolean(key, value)
+                        is String -> putString(key, value)
+                        else -> remove(key)
+                    }
+                }
+            }.commit()
+            reader.setOnImageAvailableListener(null, null)
+            consumer.quitSafely(); consumer.join(2000); reader.close()
         }
     }
 
