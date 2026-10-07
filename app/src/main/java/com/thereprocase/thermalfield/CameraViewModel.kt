@@ -90,7 +90,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     @Volatile private var archiveLoaded: Pair<SavedCapture, LoadedCapture>? = null
     private var networkSelected = false
     @Volatile private var networkFrames: NetworkFrames? = null
-    @Volatile private var commandPending = false
+    private val pendingCommandSession = AtomicLong(-1)
     private var networkThread: Thread? = null
     private var requestedDevice: String? = null
     private val mutableState = MutableStateFlow(CameraUiState(
@@ -161,6 +161,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun UsbDevice.isP2Pro() = vendorId == 0x0bda && productId == 0x5830
 
+    private fun updateSession(token: Long, change: (CameraUiState) -> CameraUiState) {
+        // A callback can cross stop/start while native work is in progress.
+        // Checking inside the CAS update also rejects a retry after disconnect.
+        mutableState.update { if (!closed && started && generation.get() == token) change(it) else it }
+    }
+
     fun foreground() { started = true; when { archiveSelected != null -> openSaved(archiveSelected!!, restoreSettings = false); networkSelected -> network(state.value.networkUrl); fixtureSelected -> fixture(); else -> connect() } }
     fun background() { started = false; disconnect("Capture paused", keepSource = true) }
 
@@ -214,11 +220,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 connection = opened
                 val identity = JSONObject(bridge.open(engine, opened.fileDescriptor))
                 if (generation.get() != token || !started) { closeConnection(); return@execute }
-                mutableState.update { it.copy(status = "Live", connected = true, fixture = false, busy = false,
+                updateSession(token) { it.copy(status = "Live", connected = true, fixture = false, busy = false,
                     serial = identity.optString("serial"), firmware = identity.optString("firmware"), highGain = true, gainKnown = true, network = false) }
             } catch (error: Exception) {
                 closeConnection()
-                if (generation.get() == token) mutableState.update { it.copy(status = error.message ?: "Camera open failed", busy = false, connected = false) }
+                updateSession(token) { it.copy(status = error.message ?: "Camera open failed", busy = false, connected = false) }
                 Log.e("ThermalField", "Camera open failed", error)
             }
         }
@@ -255,8 +261,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 closeConnection()
                 if (generation.get() != token) return@execute
                 bridge.replay(engine, context.assets.open("fixture.yuyv").use { it.readBytes() })
-                mutableState.update { it.copy(status = "Fixture replay", busy = false) }
-            } catch (error: Exception) { mutableState.update { it.copy(status = error.message ?: "Fixture failed", busy = false) } }
+                updateSession(token) { it.copy(status = "Fixture replay", busy = false) }
+            } catch (error: Exception) { updateSession(token) { it.copy(status = error.message ?: "Fixture failed", busy = false) } }
         }
     }
 
@@ -286,12 +292,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     client.frames { bytes, sequence ->
                         if (generation.get() == token && started) {
                             bridge.networkFrame(engine, bytes, sequence)
-                            if (!state.value.connected || !commandPending && state.value.status != "Network live")
-                                mutableState.update { it.copy(status = if (commandPending) it.status else "Network live", connected = true, network = true, busy = commandPending) }
+                            updateSession(token) {
+                                val pending = pendingCommandSession.get() == token
+                                if (!it.connected || !pending && it.status != "Network live")
+                                    it.copy(status = if (pending) it.status else "Network live", connected = true, network = true, busy = pending)
+                                else it
+                            }
                         }
                     }
                 } catch (error: Exception) {
-                    if (generation.get() == token && started) mutableState.update { it.copy(status = "Network stream stopped: ${error.message ?: "Reconnect"}", connected = false, busy = false) }
+                    updateSession(token) { it.copy(status = "Network stream stopped: ${error.message ?: "Reconnect"}", connected = false, busy = false) }
                 }
             }, "ThermalNetworkFrames").apply { start() }
         }
@@ -300,18 +310,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun command(nuc: Boolean, high: Boolean = true) {
         if (!state.value.connected || state.value.busy) return
         val token = generation.get()
-        commandPending = true
+        pendingCommandSession.set(token)
         mutableState.update { it.copy(status = if (nuc) "Calibration command" else "Changing gain", busy = true) }
         worker.execute {
             try {
                 if (state.value.network) NetworkFrames.command(state.value.networkUrl, if (nuc) "nuc" else "gain", high)
                 else if (nuc) bridge.nuc(engine) else bridge.gain(engine, high)
-                if (generation.get() == token) mutableState.update { it.copy(status = "Live", busy = false,
+                updateSession(token) { it.copy(status = "Live", busy = false,
                     highGain = if (nuc) it.highGain else high, gainKnown = if (nuc) it.gainKnown else true) }
             } catch (error: Exception) {
-                if (generation.get() == token) mutableState.update { it.copy(status = error.message ?: "Command failed", busy = false) }
+                updateSession(token) { it.copy(status = error.message ?: "Command failed", busy = false) }
                 Log.e("ThermalField", "Camera command failed", error)
-            } finally { commandPending = false }
+            } finally { pendingCommandSession.compareAndSet(token, -1) }
         }
     }
 
@@ -354,6 +364,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     fun selectCapture(capture: SavedCapture) { mutableState.update { it.copy(lastCapture = capture) } }
     fun openSaved(capture: SavedCapture, restoreSettings: Boolean = true) {
+        if (restoreSettings) archiveLoaded = null
         archiveSelected = capture; fixtureSelected = false; networkSelected = false
         if (!started || !surfaceReady) return
         val token = generation.incrementAndGet(); bridge.cancel(engine); networkFrames?.close()
@@ -394,7 +405,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     bridge.configure(engine, palette, false, degrees / 90, mirror, automatic, lower, upper)
                     bridge.restoreMeasurements(engine, packed, first, second, mode, isoLower, isoUpper)
                     val version = bridge.measurementVersion(engine)
-                    mutableState.update { it.copy(emissivity = epsilon, reflectedCelsius = reflected, corrected = corrected, palette = palette, rotation = degrees/90, flip = false, mirror = mirror, automatic = automatic, lower = lower, upper = upper, deltaFirst = first, deltaSecond = second, isothermMode = mode, isothermLower = isoLower, isothermUpper = isoUpper, expectedMeasurementVersion = version, measurementTool = 0, selectedMeasurement = 0) }
+                    updateSession(token) { it.copy(emissivity = epsilon, reflectedCelsius = reflected, corrected = corrected, palette = palette, rotation = degrees/90, flip = false, mirror = mirror, automatic = automatic, lower = lower, upper = upper, deltaFirst = first, deltaSecond = second, isothermMode = mode, isothermLower = isoLower, isothermUpper = isoUpper, expectedMeasurementVersion = version, measurementTool = 0, selectedMeasurement = 0) }
                 }.get(10, java.util.concurrent.TimeUnit.SECONDS)
                 if (generation.get() != token || !started) return@execute
                 val identity = m.optJSONObject("identity")
@@ -407,9 +418,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 bridge.archive(engine, loaded.composite, m.getLong("timestamp_unix_ns"), original, gain,
                     deviceContext?.optString("firmware", "") ?: "", properties("original_properties"), properties("configured_properties"))
                 archiveLoaded = capture to loaded
-                mutableState.update { it.copy(status = "Saved capture · original frame", archive = true, archiveSynthetic = original == "fixture", busy = false, lastCapture = capture, highGain = gain == 1, gainKnown = gain >= 0) }
+                updateSession(token) { it.copy(status = "Saved capture · original frame", archive = true, archiveSynthetic = original == "fixture", busy = false, lastCapture = capture, highGain = gain == 1, gainKnown = gain >= 0) }
             } catch (error: Exception) {
-                if (generation.get() == token) mutableState.update { it.copy(status = "Saved capture could not be opened", captureMessage = error.cause?.message ?: error.message ?: "Try another capture", busy = false, archive = false) }
+                updateSession(token) { it.copy(status = "Saved capture could not be opened", captureMessage = error.cause?.message ?: error.message ?: "Try another capture", busy = false, archive = false) }
             }
         }
     }

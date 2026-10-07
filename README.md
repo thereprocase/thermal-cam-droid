@@ -4,11 +4,11 @@ An independent, open-source Android thermal viewer for the USB device `0bda:5830
 
 **Development preview.** Live USB, experimental network capture and host radiometric correction have run on a Pixel 9 Pro. Measurement tools are implemented and undergoing device qualification. Comparison against the official app on ice-water and approximately 55 °C water targets has **not** been completed; camera-apparent and model-corrected values are not independently validated surface temperatures.
 
-[Download the arm64 Android APK](https://github.com/thereprocase/thermal-cam-droid/releases/download/v0.1.1/ThermalField-0.1.1-arm64-v8a.apk) · [Release notes and source archive](https://github.com/thereprocase/thermal-cam-droid/releases/tag/v0.1.1) · [Project page and screenshots](https://thereprocase.github.io/projects/thermal-field/)
+[Download the arm64 Android APK](https://github.com/thereprocase/thermal-cam-droid/releases/download/v0.1.2/ThermalField-0.1.2-arm64-v8a.apk) · [Release notes and source archive](https://github.com/thereprocase/thermal-cam-droid/releases/tag/v0.1.2) · [Project page and screenshots](https://thereprocase.github.io/projects/thermal-field/)
 
 ## Current features
 
-The list describes the latest source. The v0.1.1 development APK includes saved-capture browsing/reanalysis.
+The list describes the latest source. The v0.1.2 development APK includes saved-capture browsing/reanalysis and the foreground session-recovery follow-up.
 
 - Native USB capture through Android UsbManager, a borrowed file descriptor, libusb and libuvc. No proprietary camera SDK.
 - GPU rendering of the bottom 256 × 192 radiometric plane; the camera's AGC preview is ignored for display.
@@ -61,6 +61,14 @@ adb shell am instrument -w com.thereprocase.thermalfield.test/com.thereprocase.t
 ```
 
 It creates and removes its own synthetic capture set. Its synthetic firmware/register inputs do not qualify physical camera accuracy.
+
+For foreground recovery checks, first connect the unlocked debug app to a healthy desktop bridge, then run:
+
+```sh
+python3 tools/check_pixel_network_lifecycle.py --serial YOUR_ADB_DEVICE --cycles 10 --output lifecycle-results.json
+```
+
+The checker cycles Home/return, requires fresh telemetry after each return and samples the app process's open descriptors. It reports observed counts and source gaps; it does not qualify physical USB detach/reattach or sensor accuracy.
 
 Native decoding is tested against a captured composite fixture. Radiometric PNG tests independently decode all 49,152 words and verify exact preservation. Synthetic radiometry tests verify numerical behavior, not camera accuracy.
 

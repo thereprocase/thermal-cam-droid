@@ -1,0 +1,127 @@
+{
+  "baseline_fd_count": 198,
+  "samples": [
+    {
+      "received": 43,
+      "rendered": 43,
+      "malformed": 0,
+      "overflow": 0,
+      "source_sequence_gaps": 0,
+      "fps": 25.7062941101,
+      "callback_to_swap_ms": 4.309326,
+      "presentation_latency_ms": 18.928548,
+      "cycle": 1,
+      "fd_count": 193
+    },
+    {
+      "received": 50,
+      "rendered": 50,
+      "malformed": 0,
+      "overflow": 0,
+      "source_sequence_gaps": 2,
+      "fps": 25.1041832957,
+      "callback_to_swap_ms": 3.379964,
+      "presentation_latency_ms": 19.40035,
+      "cycle": 2,
+      "fd_count": 194
+    },
+    {
+      "received": 38,
+      "rendered": 38,
+      "malformed": 0,
+      "overflow": 0,
+      "source_sequence_gaps": 0,
+      "fps": 26.2698781905,
+      "callback_to_swap_ms": 3.456991,
+      "presentation_latency_ms": 20.967001,
+      "cycle": 3,
+      "fd_count": 196
+    },
+    {
+      "received": 46,
+      "rendered": 46,
+      "malformed": 0,
+      "overflow": 0,
+      "source_sequence_gaps": 0,
+      "fps": 25.2490521901,
+      "callback_to_swap_ms": 4.627319,
+      "presentation_latency_ms": 18.692749,
+      "cycle": 4,
+      "fd_count": 196
+    },
+    {
+      "received": 39,
+      "rendered": 39,
+      "malformed": 0,
+      "overflow": 0,
+      "source_sequence_gaps": 1,
+      "fps": 25.772659849,
+      "callback_to_swap_ms": 2.769897,
+      "presentation_latency_ms": 16.797363,
+      "cycle": 5,
+      "fd_count": 196
+    },
+    {
+      "received": 40,
+      "rendered": 40,
+      "malformed": 0,
+      "overflow": 0,
+      "source_sequence_gaps": 0,
+      "fps": 25.7462952004,
+      "callback_to_swap_ms": 3.77596,
+      "presentation_latency_ms": 17.131795,
+      "cycle": 6,
+      "fd_count": 194
+    },
+    {
+      "received": 47,
+      "rendered": 47,
+      "malformed": 0,
+      "overflow": 0,
+      "source_sequence_gaps": 0,
+      "fps": 25.7365423564,
+      "callback_to_swap_ms": 4.332112,
+      "presentation_latency_ms": 16.014974,
+      "cycle": 7,
+      "fd_count": 194
+    },
+    {
+      "received": 38,
+      "rendered": 38,
+      "malformed": 0,
+      "overflow": 0,
+      "source_sequence_gaps": 4,
+      "fps": 24.2006678987,
+      "callback_to_swap_ms": 3.614258,
+      "presentation_latency_ms": 20.663493,
+      "cycle": 8,
+      "fd_count": 194
+    },
+    {
+      "received": 48,
+      "rendered": 48,
+      "malformed": 0,
+      "overflow": 0,
+      "source_sequence_gaps": 0,
+      "fps": 25.8413549155,
+      "callback_to_swap_ms": 2.268351,
+      "presentation_latency_ms": 18.071614,
+      "cycle": 9,
+      "fd_count": 194
+    },
+    {
+      "received": 48,
+      "rendered": 48,
+      "malformed": 0,
+      "overflow": 0,
+      "source_sequence_gaps": 0,
+      "fps": 25.6034523721,
+      "callback_to_swap_ms": 3.463664,
+      "presentation_latency_ms": 21.767822,
+      "cycle": 10,
+      "fd_count": 194
+    }
+  ],
+  "completed": true,
+  "final_fd_count": 194
+}
