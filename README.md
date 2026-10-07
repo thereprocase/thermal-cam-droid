@@ -10,7 +10,7 @@ An independent, open-source Android thermal viewer for the USB device `0bda:5830
 
 The list describes the latest source. The v0.1.2 development APK includes saved-capture browsing/reanalysis and the foreground session-recovery follow-up.
 
-Source updates after 0.1.2 add queued-command cancellation/target retention and clear inherited network/gain labels when entering Demo. Debug builds of the upcoming version identify as 0.1.3-dev; 0.1.2 release artifacts remain unchanged.
+Source updates after 0.1.2 add queued-command cancellation/target retention, clear inherited network/gain labels when entering Demo, and provide explicit ± controls for temperature inputs. Debug builds of the upcoming version identify as 0.1.3-dev; 0.1.2 release artifacts remain unchanged.
 
 - Native USB capture through Android UsbManager, a borrowed file descriptor, libusb and libuvc. No proprietary camera SDK.
 - GPU rendering of the bottom 256 × 192 radiometric plane; the camera's AGC preview is ignored for display.
@@ -73,6 +73,8 @@ python3 tools/check_pixel_network_lifecycle.py --serial YOUR_ADB_DEVICE --cycles
 The checker cycles Home/return, requires fresh telemetry after each return and samples the app process's open descriptors. It reports observed counts and source gaps; it does not qualify physical USB detach/reattach or sensor accuracy.
 
 Native decoding is tested against a captured composite fixture. Radiometric PNG tests independently decode all 49,152 words and verify exact preservation. Synthetic radiometry tests verify numerical behavior, not camera accuracy.
+
+The remaining powered-device persistence, official-app water-bath and direct-USB lifecycle checks have a [physical bench procedure](docs/PHYSICAL_BENCH.md). Observed results and their limits remain in [VALIDATION.md](docs/VALIDATION.md).
 
 Measurement geometry is stored in original sensor pixels. Boxes include both endpoint pixels; line samples are evenly spaced and rounded to the nearest sensor pixel, with both endpoints included. Box/line means average valid temperatures after correction, rather than applying correction to an averaged word or radiance. Profiles show sample positions, without a physical-length calibration. Δ°F scales Δ°C by 1.8 with no absolute-temperature offset. JSON retains full geometry, validity counts, profile values/indices and the selected isotherm/ΔT configuration from the captured frame. These settings remain in memory through reconnect; process-restart restoration is not implemented yet.
 

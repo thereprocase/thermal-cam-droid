@@ -46,6 +46,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.contentDescription
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.util.Locale
@@ -156,6 +157,19 @@ class MainActivity : ComponentActivity() {
         .background(if (selected == true) Blue else Color.White).semantics { if (selected != null) stateDescription = if (selected) "Selected" else "Not selected" }
         .clickable(enabled = enabled, role = Role.Button, onClick = action).padding(horizontal = 12.dp, vertical = 12.dp)) {
         Label(text, color = if (!enabled) Rule else if (selected == true) Color.White else Blue)
+    }
+}
+
+@Composable private fun TemperatureInput(value: String, change: (String) -> Unit) {
+    // Decimal IME hints do not specify a signed-number keypad. Explicit sign
+    // control keeps cold-scene inputs accessible across keyboard layouts.
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        BasicTextField(value, change, Modifier.weight(1f).border(1.dp, Rule).background(Color.White).padding(12.dp),
+            textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+        Action("±", modifier = Modifier.widthIn(min = 48.dp).semantics { contentDescription = "Change temperature sign" }) {
+            change(if (value.startsWith("-")) value.removePrefix("-") else "-${value.removePrefix("+")}")
+        }
     }
 }
 
@@ -411,9 +425,9 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                     listOf("Band", "Below", "Above").forEachIndexed { index, label -> Action(label, isothermMode == index+1, modifier = Modifier.weight(1f)) { isothermMode = index+1 } }
                 }
                 Label("Lower / below threshold ${if (state.fahrenheit) "°F" else "°C"}")
-                BasicTextField(isothermLower, { isothermLower = it }, Modifier.fillMaxWidth().border(1.dp, Rule).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                TemperatureInput(isothermLower) { isothermLower = it }
                 Label("Upper / above threshold ${if (state.fahrenheit) "°F" else "°C"}")
-                BasicTextField(isothermUpper, { isothermUpper = it }, Modifier.fillMaxWidth().border(1.dp, Rule).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                TemperatureInput(isothermUpper) { isothermUpper = it }
                 if (isothermError.isNotEmpty()) Label(isothermError, color = Color(0xffb3261e))
                 Action("Apply cyan highlight") {
                     fun parse(text: String) = text.toFloatOrNull()?.let { if (state.fahrenheit) (it - 32) / 1.8f else it }
@@ -432,7 +446,7 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                 Label("Emissivity (greater than 0, at most 1)")
                 BasicTextField(emissivityText, { emissivityText = it }, Modifier.fillMaxWidth().border(1.dp, Rule).background(Color.White).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
                 Label("Reflected apparent temperature ${if (state.fahrenheit) "°F" else "°C"}")
-                BasicTextField(reflectedText, { reflectedText = it }, Modifier.fillMaxWidth().border(1.dp, Rule).background(Color.White).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                TemperatureInput(reflectedText) { reflectedText = it }
                 if (correctionError.isNotEmpty()) Label(correctionError, color = Color(0xffb3261e))
                 Action("Apply inputs") {
                     val epsilon = emissivityText.toDoubleOrNull()
@@ -448,9 +462,9 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
         Pane("LOCKED LEVEL / SPAN") {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Label("Lower ${if (state.fahrenheit) "°F" else "°C"}")
-                BasicTextField(lowerText, { lowerText = it }, Modifier.fillMaxWidth().border(1.dp, Rule).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                TemperatureInput(lowerText) { lowerText = it }
                 Label("Upper ${if (state.fahrenheit) "°F" else "°C"}")
-                BasicTextField(upperText, { upperText = it }, Modifier.fillMaxWidth().border(1.dp, Rule).padding(12.dp), textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                TemperatureInput(upperText) { upperText = it }
                 if (spanError.isNotEmpty()) Label(spanError, color = Color(0xffb3261e))
                 Action("Apply locked range") {
                     var lower = lowerText.toFloatOrNull(); var upper = upperText.toFloatOrNull()

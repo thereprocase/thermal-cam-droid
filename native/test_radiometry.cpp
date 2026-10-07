@@ -24,6 +24,25 @@ int main() {
         require(std::abs(corrected.temperature[word]-object_c)<0.02,"Graybody synthetic recovery");
     }
     require(std::isnan(corrected.temperature[0]),"Negative solved radiance is invalid");
+    // Cold reflected sky and sub-zero objects are normal enclosure inputs.
+    // Compare the quantized-word lookup to finer quadrature plus bisection,
+    // separately from the error introduced by the camera's 1/64 K words.
+    for(double reflected_c : {-60.0,-20.0,20.0,60.0}) {
+        for(double epsilon : {.5,.9,.96}) {
+            CorrectionTable cold(table,epsilon,reflected_c,true);
+            for(double object_c : {-20.0,0.0,55.0}) {
+                const double reflection=band_radiance(reflected_c+273.15,768);
+                const double measured=table.temperature(epsilon*band_radiance(object_c+273.15,768)+(1-epsilon)*reflection);
+                const auto word=static_cast<unsigned>(std::lround(measured*64));
+                const double target=(band_radiance(word/64.0,768)-(1-epsilon)*reflection)/epsilon;
+                double lower=0,upper=1100;
+                for(unsigned i=0;i<48;++i){const double middle=(lower+upper)/2;if(band_radiance(middle,768)<target)lower=middle;else upper=middle;}
+                const double reference=(lower+upper)/2-273.15;
+                require(std::abs(cold.temperature[word]-reference)<.001,"Cold-scene independent inverse agreement");
+                require(std::abs(cold.temperature[word]-object_c)<.05,"Cold-scene quantized synthetic recovery");
+            }
+        }
+    }
     for(double epsilon : {0.0,-.1,1.1}) {
         bool rejected=false;try{CorrectionTable invalid(table,epsilon,20,true);}catch(const std::invalid_argument&){rejected=true;}
         require(rejected,"Reject invalid emissivity");

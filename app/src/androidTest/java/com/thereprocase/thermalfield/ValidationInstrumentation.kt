@@ -134,6 +134,18 @@ class ValidationInstrumentation : Instrumentation() {
                     error("Synthetic network source did not become ready")
                 }
                 awaitConnected(first.address)
+                val unchangedDeadline = SystemClock.elapsedRealtime() + 5000
+                while (model.state.value.frame.unchangedMs < 700 && SystemClock.elapsedRealtime() < unchangedDeadline) SystemClock.sleep(20)
+                check(model.state.value.frame.unchangedMs >= 700 && model.state.value.frame.ageMs < 300) { "Repeated content was not distinguished from stalled transport" }
+                first.paused.set(true)
+                val stallDeadline = SystemClock.elapsedRealtime() + 5000
+                while (model.state.value.frame.ageMs < 700 && SystemClock.elapsedRealtime() < stallDeadline) SystemClock.sleep(20)
+                val stalled = model.state.value.frame
+                check(stalled.ageMs >= 700 && model.state.value.connected) { "Live socket pause did not produce stalled-frame telemetry" }
+                first.paused.set(false)
+                val resumeDeadline = SystemClock.elapsedRealtime() + 5000
+                while ((model.state.value.frame.received <= stalled.received || model.state.value.frame.ageMs >= 300) && SystemClock.elapsedRealtime() < resumeDeadline) SystemClock.sleep(20)
+                check(model.state.value.frame.received > stalled.received && model.state.value.frame.ageMs < 300) { "Frame delivery did not recover after a bounded synthetic pause" }
                 // Occupy the real command executor to force the queued case;
                 // ordinary gesture timing cannot reliably reproduce this race.
                 val field = CameraViewModel::class.java.getDeclaredField("worker").apply { isAccessible = true }
