@@ -26,7 +26,7 @@ The list describes the latest source. Saved-capture browsing/reanalysis was adde
 - Original synthetic demo for UI development, explicitly labeled as synthetic.
 - Experimental lossless network source from the included desktop bridge. This decoder requires original composites with thermal-field-v1 headers; other IP thermal camera formats need an adapter.
 
-Planned: importing captures from other installations, annotation naming/persistence across process restart and further lifecycle/accuracy qualification. See [feature scope](docs/FEATURES.md) and [validation](docs/VALIDATION.md).
+Planned: importing captures from other installations, annotation naming/persistence across process restart and further lifecycle/accuracy qualification. See [saved-capture behavior](docs/SAVED_CAPTURES.md), [feature scope](docs/FEATURES.md) and [validation](docs/VALIDATION.md).
 
 <img src="docs/synthetic-export.png" width="320" alt="A rotated synthetic enclosure export with temperature markers, palette legend and an explicit synthetic-data caption">
 

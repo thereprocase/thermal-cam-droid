@@ -73,4 +73,6 @@ Wireless ADB was subsequently recovered through the already configured Tailscale
 
 - Sharing the complete saved capture opened Android's chooser with **Sharing 3 files**. Cancelling returned to the saved-frame source with the image/readouts available. No recipient was selected. This checks chooser handoff/recovery, not delivery to another application.
 
-Remaining gallery checks: captures with invalid radiance, inaccessible or malformed sidecars, and physical-camera saved frames. File import from another installation is not implemented; the gallery describes this limit explicitly. Reopening source metadata does not establish a verified physical baseline.
+- Reopened the all-invalid synthetic capture (ε = 0.001, reflected 200 °C) whose automatic limits were JSON null. Opening succeeded, UI readings were blank, and the derived export retained **49,152 invalid pixels**, null extrema/center and an interior magenta **(191, 0, 191)** GPU pixel. Independent numeric verification and every-word raw preservation passed. Invalid automatic limits use finite placeholder configuration only; automatic rendering/readings still derive from the frame's valid samples.
+
+Remaining gallery checks: inaccessible or malformed sidecars and physical-camera saved frames. File import from another installation is not implemented; the gallery describes this limit explicitly. Reopening source metadata does not establish a verified physical baseline.
