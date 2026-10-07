@@ -70,12 +70,10 @@ data class CameraUiState(
     val gallery: List<CaptureRecord> = emptyList(), val galleryLoading: Boolean = false, val galleryError: String = "",
 )
 
-// USB sensor axes rotate with a camera mounted to the phone. Network and saved
-// sources have independent mounting/original axes and only use manual rotation.
-internal val CameraUiState.cameraRotation: Int
-    get() = (rotation - (if (!archive && !network && !fixture) displayRotation else 0) + 4) % 4
+// The attached camera rotates with the phone. Screen orientation controls
+// GUI layout; it must not add another transform to the camera image.
 internal val CameraUiState.renderRotation: Int
-    get() = (cameraRotation + (if (flip) 2 else 0)) % 4
+    get() = (rotation + (if (flip) 2 else 0)) % 4
 
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application
@@ -215,8 +213,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val profile = JSONObject(bridge.restoreLiveProfile(engine))
             updateSession(token) { it.copy(
                 palette = profile.getInt("palette"), flip = profile.getBoolean("flip"),
-                // The native backup contains the compensated angle; retain the
-                // persisted manual offset and apply today's display rotation.
+                // Screen orientation is independent of the persisted manual
+                // mounting offset, including after saved-profile recovery.
                 rotation = preferences.getInt("rotation", 0), mirror = profile.getBoolean("mirror"),
                 automatic = profile.getBoolean("automatic"), lower = profile.getDouble("lower").toFloat(), upper = profile.getDouble("upper").toFloat(),
                 emissivity = profile.getDouble("emissivity"), reflectedCelsius = profile.getDouble("reflected"), corrected = profile.getBoolean("corrected"),
@@ -568,7 +566,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         require(quarterTurns in 0..3)
         if (state.value.displayRotation == quarterTurns) return
         mutableState.update { it.copy(displayRotation = quarterTurns) }
-        if (!state.value.profileApplying) configure()
     }
     fun fullScreen(value: Boolean) { mutableState.update { it.copy(fullScreen = value) } }
     private fun measurementChange(operation: () -> Unit) {
@@ -643,7 +640,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun nativeSourceGeneration(): Long = JSONObject(bridge.summary(engine)).getLong("current_generation")
 
     private fun configure() {
-        state.value.let { bridge.configure(engine, it.palette, it.flip, it.cameraRotation, it.mirror, it.automatic, it.lower, it.upper) }
+        state.value.let { bridge.configure(engine, it.palette, it.flip, it.rotation, it.mirror, it.automatic, it.lower, it.upper) }
         val version = bridge.measurementVersion(engine)
         mutableState.update { it.copy(expectedMeasurementVersion = version) }
     }

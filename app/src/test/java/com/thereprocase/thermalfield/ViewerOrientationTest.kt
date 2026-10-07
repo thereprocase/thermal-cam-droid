@@ -4,10 +4,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ViewerOrientationTest {
-    @Test fun attachedSensorCompensatesEveryDisplayOrientation() {
+    @Test fun screenRotationDoesNotTransformAttachedCameraImage() {
         for (manual in 0..3) for (display in 0..3) for (flip in listOf(false, true)) {
             val state = CameraUiState(rotation = manual, displayRotation = display, flip = flip)
-            assertEquals((manual + (if (flip) 2 else 0) - display + 4) % 4, state.renderRotation)
+            assertEquals((manual + (if (flip) 2 else 0)) % 4, state.renderRotation)
         }
     }
 

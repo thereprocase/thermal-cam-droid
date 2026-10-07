@@ -28,8 +28,8 @@ android {
             else providers.gradleProperty("validationApplicationId").orElse("com.thereprocase.thermalfield").get()
         minSdk = 36
         targetSdk = 37
-        versionCode = 5
-        versionName = "0.1.3-rc1"
+        versionCode = 6
+        versionName = "0.1.3-rc2"
         testInstrumentationRunner = "com.thereprocase.thermalfield.ValidationInstrumentation"
         ndk { abiFilters += if (emulatorValidation) "x86_64" else "arm64-v8a" }
         externalNativeBuild {
