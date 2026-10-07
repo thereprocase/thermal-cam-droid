@@ -113,7 +113,8 @@ private fun imageBounds(width: Float, height: Float, ratio: Float): FloatArray {
             Action("Clear measurements", enabled = state.frame.measurements.isNotEmpty(), modifier = Modifier.weight(1f)) { model.deleteMeasurement(0) }
             Action("Isotherm…", modifier = Modifier.weight(1f), action = editIsotherm)
         }
-        Label(if (state.isothermMode == 0) "Isotherm off" else "Isotherm ${listOf("", "band", "below", "above")[state.isothermMode]} · ${state.frame.isothermPixels} matching sensor pixels", Modifier.padding(12.dp), mono = true, size = 12)
+        val isotherm = isothermDescription(state.isothermMode, state.isothermLower.toDouble(), state.isothermUpper.toDouble(), state.fahrenheit)
+        Label("Isotherm $isotherm${if (state.isothermMode == 0) "" else " · ${state.frame.isothermPixels} matching sensor pixels"}", Modifier.padding(12.dp), mono = true, size = 12)
     }
 }
 

@@ -50,10 +50,10 @@ def main():
         adb("shell", "input", "tap", str((x0+x1)//2), str((y0+y1)//2))
         time.sleep(0.4)
 
-    def scroll_to(label):
+    def scroll_to(label, prefix=False):
         for _ in range(12):
             snapshot = nodes()
-            if find(label, snapshot) is not None:
+            if find(label, snapshot) is not None or prefix and any(n.get("text", "").startswith(label) for n in snapshot):
                 return
             # Use the actual scroll pane, rather than display-relative points
             # that can land on the pinned viewport or capture bar.
@@ -119,11 +119,36 @@ def main():
         raise AssertionError("Sign button did not change the reflected-temperature field")
     tap("Change temperature sign")
     tap("Apply inputs")
+    tap("Full screen")
+    tap("Exit full screen")
+    scroll_to("Isotherm…")
+    tap("Isotherm…")
+    tap("Band")
+    def threshold_fields():
+        return [n for n in nodes() if n.get("class") == "android.widget.EditText"]
+    if len(threshold_fields()) != 2:
+        raise AssertionError("Band editor should expose two limits")
+    tap("Below")
+    require("Below threshold °C")
+    if len(threshold_fields()) != 1:
+        raise AssertionError("Below editor should expose one threshold")
+    tap("Above")
+    require("Above threshold °C")
+    if len(threshold_fields()) != 1:
+        raise AssertionError("Above editor should expose one threshold")
+    tap("Apply cyan highlight")
+    scroll_to("Isotherm above ", prefix=True)
+    snapshot = nodes()
+    if not any(n.get("text", "").startswith("Isotherm above ") for n in snapshot):
+        raise AssertionError("Viewer isotherm summary omitted the active threshold")
+    tap("Isotherm…")
+    tap("Disable isotherm")
     adb("shell", "input", "keyevent", "KEYCODE_HOME")
     adb("shell", "am", "start", "-n", f"{PACKAGE}/com.thereprocase.thermalfield.MainActivity")
     require("DEMO / SYNTHETIC TEMPERATURES")
     print(json.dumps({"source": "synthetic", "full_screen_button_and_back": "passed",
                       "rotation_mirror_flip": "passed", "reflected_sign_button": "passed",
+                      "mode_specific_isotherm_fields_and_summary": "passed",
                       "home_return_source_label": "passed", "physical_camera_validation": "not tested"}))
 
 

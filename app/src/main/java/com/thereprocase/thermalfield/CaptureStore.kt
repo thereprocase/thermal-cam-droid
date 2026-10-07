@@ -176,7 +176,11 @@ internal object CaptureStore {
             val text = if (value.isFinite()) String.format(Locale.US, "%.1f Δ°%s", value, if (fahrenheit) "F" else "C") else "—"
             canvas.drawText("ΔT P${delta.getInt("first")} − P${delta.getInt("second")} $text", 16f, extraRow, paint); extraRow += 30
         }
-        if (showIsotherm) canvas.drawText("Cyan isotherm ${isotherm!!.getString("mode")} ${temperature(isotherm.getDouble("lower_celsius"))} / ${temperature(isotherm.getDouble("upper_celsius"))} · ${isotherm.getInt("matched_pixels")} pixels", 16f, extraRow, paint)
+        if (showIsotherm) {
+            val mode = when (isotherm!!.getString("mode")) { "band" -> 1; "below" -> 2; "above" -> 3; else -> 0 }
+            val description = isothermDescription(mode, isotherm.getDouble("lower_celsius"), isotherm.getDouble("upper_celsius"), fahrenheit)
+            canvas.drawText("Cyan isotherm $description · ${isotherm.getInt("matched_pixels")} pixels", 16f, extraRow, paint)
+        }
         val output = ByteArrayOutputStream()
         check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "PNG encoding failed" }
         bitmap.recycle()

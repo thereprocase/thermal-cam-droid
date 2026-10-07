@@ -460,16 +460,19 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf("Band", "Below", "Above").forEachIndexed { index, label -> Action(label, isothermMode == index+1, modifier = Modifier.weight(1f)) { isothermMode = index+1 } }
                 }
-                Label("Lower / below threshold ${if (state.fahrenheit) "°F" else "°C"}")
-                TemperatureInput(isothermLower) { isothermLower = it }
-                Label("Upper / above threshold ${if (state.fahrenheit) "°F" else "°C"}")
-                TemperatureInput(isothermUpper) { isothermUpper = it }
+                if (isothermMode != 3) {
+                    Label("${if (isothermMode == 2) "Below threshold" else "Lower limit"} ${if (state.fahrenheit) "°F" else "°C"}")
+                    TemperatureInput(isothermLower) { isothermLower = it }
+                }
+                if (isothermMode != 2) {
+                    Label("${if (isothermMode == 3) "Above threshold" else "Upper limit"} ${if (state.fahrenheit) "°F" else "°C"}")
+                    TemperatureInput(isothermUpper) { isothermUpper = it }
+                }
                 if (isothermError.isNotEmpty()) Label(isothermError, color = Color(0xffb3261e))
                 Action("Apply cyan highlight") {
-                    fun parse(text: String) = text.toFloatOrNull()?.let { if (state.fahrenheit) (it - 32) / 1.8f else it }
-                    val lower = parse(isothermLower); val upper = parse(isothermUpper)
-                    if (lower == null || upper == null || !lower.isFinite() || !upper.isFinite() || upper < lower) isothermError = "Enter finite limits, upper at least lower."
-                    else { model.measurementOptions(mode = isothermMode, lower = lower, upper = upper); isothermDialog = false; model.editing(false) }
+                    val limits = parseIsotherm(isothermMode, isothermLower, isothermUpper, state.fahrenheit)
+                    if (limits == null) isothermError = if (isothermMode == 1) "Enter finite limits, upper at least lower." else "Enter a finite threshold."
+                    else { model.measurementOptions(mode = isothermMode, lower = limits.lower, upper = limits.upper); isothermDialog = false; model.editing(false) }
                 }
                 Action("Disable isotherm") { model.measurementOptions(mode = 0); isothermDialog = false; model.editing(false) }
                 Label("Thresholds include their endpoints. Invalid correction solutions are excluded. Highlighting does not change the temperature words or span.", size = 12)
