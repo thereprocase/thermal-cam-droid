@@ -128,7 +128,7 @@ class ValidationInstrumentation : Instrumentation() {
                     val deadline = SystemClock.elapsedRealtime() + 8000
                     while (SystemClock.elapsedRealtime() < deadline) {
                         val state = model.state.value
-                        if (state.networkUrl == address && state.connected && !state.busy && state.frame.received >= 10 && state.frame.frame > 0) return
+                        if (state.network && state.networkUrl == address && state.connected && !state.busy && state.frame.received >= 10 && state.frame.frame > 0) return
                         SystemClock.sleep(20)
                     }
                     error("Synthetic network source did not become ready")
@@ -141,11 +141,17 @@ class ValidationInstrumentation : Instrumentation() {
                 val blocked = CountDownLatch(1)
                 executor!!.execute { blocked.countDown(); check(release.await(10, TimeUnit.SECONDS)) }
                 check(blocked.await(2, TimeUnit.SECONDS))
-                runOnMainSync { model.command(nuc = true); model.network(second.address) }
+                runOnMainSync {
+                    check(model.state.value.network && model.state.value.networkUrl == first.address)
+                    model.command(nuc = true); model.network(second.address)
+                }
                 release.countDown()
                 awaitConnected(second.address)
                 check(first.controls.get() == 0 && second.controls.get() == 0) { "Cancelled queued control reached a bridge" }
-                runOnMainSync { model.command(nuc = false, high = true) }
+                runOnMainSync {
+                    check(model.state.value.network && model.state.value.networkUrl == second.address)
+                    model.command(nuc = false, high = true)
+                }
                 val deadline = SystemClock.elapsedRealtime() + 5000
                 while ((!model.state.value.gainKnown || model.state.value.busy) && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(20)
                 check(first.controls.get() == 0 && second.controls.get() == 1 && model.state.value.gainKnown && !model.state.value.busy) { "Current control did not reach its selected bridge" }
