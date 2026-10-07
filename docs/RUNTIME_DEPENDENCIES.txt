@@ -1,0 +1,239 @@
+androidx.activity:activity-compose:1.10.1 (activity-compose-1.10.1.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/activity/activity-compose/1.10.1/activity-compose-1.10.1.pom
+
+androidx.activity:activity-ktx:1.10.1 (activity-ktx-1.10.1.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/activity/activity-ktx/1.10.1/activity-ktx-1.10.1.pom
+
+androidx.activity:activity:1.10.1 (activity-1.10.1.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/activity/activity/1.10.1/activity-1.10.1.pom
+
+androidx.annotation:annotation-experimental:1.4.1 (annotation-experimental-1.4.1.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/annotation/annotation-experimental/1.4.1/annotation-experimental-1.4.1.pom
+
+androidx.annotation:annotation-jvm:1.9.1 (annotation-jvm-1.9.1.jar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/annotation/annotation-jvm/1.9.1/annotation-jvm-1.9.1.pom
+
+androidx.arch.core:core-common:2.2.0 (core-common-2.2.0.jar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/arch/core/core-common/2.2.0/core-common-2.2.0.pom
+
+androidx.arch.core:core-runtime:2.2.0 (core-runtime-2.2.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/arch/core/core-runtime/2.2.0/core-runtime-2.2.0.pom
+
+androidx.autofill:autofill:1.0.0 (autofill-1.0.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/autofill/autofill/1.0.0/autofill-1.0.0.pom
+
+androidx.collection:collection-jvm:1.5.0 (collection-jvm-1.5.0.jar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/collection/collection-jvm/1.5.0/collection-jvm-1.5.0.pom
+
+androidx.collection:collection-ktx:1.5.0 (collection-ktx-1.5.0.jar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/collection/collection-ktx/1.5.0/collection-ktx-1.5.0.pom
+
+androidx.compose.animation:animation-android:1.12.1 (animation.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/animation/animation-android/1.12.1/animation-android-1.12.1.pom
+
+androidx.compose.animation:animation-core-android:1.12.1 (animation-core.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/animation/animation-core-android/1.12.1/animation-core-android-1.12.1.pom
+
+androidx.compose.foundation:foundation-android:1.12.1 (foundation.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.12.1/foundation-android-1.12.1.pom
+
+androidx.compose.foundation:foundation-layout-android:1.12.1 (foundation-layout.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-layout-android/1.12.1/foundation-layout-android-1.12.1.pom
+
+androidx.compose.runtime:runtime-android:1.12.1 (runtime.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/runtime/runtime-android/1.12.1/runtime-android-1.12.1.pom
+
+androidx.compose.runtime:runtime-annotation-android:1.12.1 (runtime-annotation.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/runtime/runtime-annotation-android/1.12.1/runtime-annotation-android-1.12.1.pom
+
+androidx.compose.runtime:runtime-retain-android:1.12.1 (runtime-retain.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/runtime/runtime-retain-android/1.12.1/runtime-retain-android-1.12.1.pom
+
+androidx.compose.runtime:runtime-saveable-android:1.12.1 (runtime-saveable.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/runtime/runtime-saveable-android/1.12.1/runtime-saveable-android-1.12.1.pom
+
+androidx.compose.ui:ui-android:1.12.1 (ui.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-android/1.12.1/ui-android-1.12.1.pom
+
+androidx.compose.ui:ui-geometry-android:1.12.1 (ui-geometry.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-geometry-android/1.12.1/ui-geometry-android-1.12.1.pom
+
+androidx.compose.ui:ui-graphics-android:1.12.1 (ui-graphics.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-graphics-android/1.12.1/ui-graphics-android-1.12.1.pom
+
+androidx.compose.ui:ui-text-android:1.12.1 (ui-text.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-text-android/1.12.1/ui-text-android-1.12.1.pom
+
+androidx.compose.ui:ui-tooling-preview-android:1.12.1 (ui-tooling-preview.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-tooling-preview-android/1.12.1/ui-tooling-preview-android-1.12.1.pom
+
+androidx.compose.ui:ui-unit-android:1.12.1 (ui-unit.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-unit-android/1.12.1/ui-unit-android-1.12.1.pom
+
+androidx.compose.ui:ui-util-android:1.12.1 (ui-util.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-util-android/1.12.1/ui-util-android-1.12.1.pom
+
+androidx.concurrent:concurrent-futures:1.1.0 (concurrent-futures-1.1.0.jar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/concurrent/concurrent-futures/1.1.0/concurrent-futures-1.1.0.pom
+
+androidx.core:core-ktx:1.16.0 (core-ktx-1.16.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/core/core-ktx/1.16.0/core-ktx-1.16.0.pom
+
+androidx.core:core-viewtree:1.0.0 (core-viewtree-1.0.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/core/core-viewtree/1.0.0/core-viewtree-1.0.0.pom
+
+androidx.core:core:1.16.0 (core-1.16.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/core/core/1.16.0/core-1.16.0.pom
+
+androidx.core:core:1.16.0 (core-1.16.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/core/core/1.16.0/core-1.16.0.pom
+
+androidx.customview:customview-poolingcontainer:1.0.0 (customview-poolingcontainer-1.0.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/customview/customview-poolingcontainer/1.0.0/customview-poolingcontainer-1.0.0.pom
+
+androidx.emoji2:emoji2:1.4.0 (emoji2-1.4.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/emoji2/emoji2/1.4.0/emoji2-1.4.0.pom
+
+androidx.graphics:graphics-path:1.0.1 (graphics-path-1.0.1.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/graphics/graphics-path/1.0.1/graphics-path-1.0.1.pom
+
+androidx.interpolator:interpolator:1.0.0 (interpolator-1.0.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/interpolator/interpolator/1.0.0/interpolator-1.0.0.pom
+
+androidx.lifecycle:lifecycle-common-jvm:2.9.4 (lifecycle-common-jvm-2.9.4.jar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-common-jvm/2.9.4/lifecycle-common-jvm-2.9.4.pom
+
+androidx.lifecycle:lifecycle-livedata-core:2.9.4 (lifecycle-livedata-core-2.9.4.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-livedata-core/2.9.4/lifecycle-livedata-core-2.9.4.pom
+
+androidx.lifecycle:lifecycle-process:2.9.4 (lifecycle-process-2.9.4.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-process/2.9.4/lifecycle-process-2.9.4.pom
+
+androidx.lifecycle:lifecycle-runtime-android:2.9.4 (lifecycle-runtime-release.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-runtime-android/2.9.4/lifecycle-runtime-android-2.9.4.pom
+
+androidx.lifecycle:lifecycle-runtime-compose-android:2.9.4 (lifecycle-runtime-compose-release.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-runtime-compose-android/2.9.4/lifecycle-runtime-compose-android-2.9.4.pom
+
+androidx.lifecycle:lifecycle-runtime-ktx-android:2.9.4 (lifecycle-runtime-ktx.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-runtime-ktx-android/2.9.4/lifecycle-runtime-ktx-android-2.9.4.pom
+
+androidx.lifecycle:lifecycle-viewmodel-android:2.9.4 (lifecycle-viewmodel-release.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-viewmodel-android/2.9.4/lifecycle-viewmodel-android-2.9.4.pom
+
+androidx.lifecycle:lifecycle-viewmodel-compose-android:2.9.4 (lifecycle-viewmodel-compose-release.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-viewmodel-compose-android/2.9.4/lifecycle-viewmodel-compose-android-2.9.4.pom
+
+androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.4 (lifecycle-viewmodel-ktx-2.9.4.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-viewmodel-ktx/2.9.4/lifecycle-viewmodel-ktx-2.9.4.pom
+
+androidx.lifecycle:lifecycle-viewmodel-savedstate-android:2.9.4 (lifecycle-viewmodel-savedstate-release.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-viewmodel-savedstate-android/2.9.4/lifecycle-viewmodel-savedstate-android-2.9.4.pom
+
+androidx.profileinstaller:profileinstaller:1.4.0 (profileinstaller-1.4.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/profileinstaller/profileinstaller/1.4.0/profileinstaller-1.4.0.pom
+
+androidx.savedstate:savedstate-android:1.3.2 (savedstate-release.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/savedstate/savedstate-android/1.3.2/savedstate-android-1.3.2.pom
+
+androidx.savedstate:savedstate-compose-android:1.3.2 (savedstate-compose.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/savedstate/savedstate-compose-android/1.3.2/savedstate-compose-android-1.3.2.pom
+
+androidx.savedstate:savedstate-ktx:1.3.2 (savedstate-ktx-1.3.2.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/savedstate/savedstate-ktx/1.3.2/savedstate-ktx-1.3.2.pom
+
+androidx.startup:startup-runtime:1.1.1 (startup-runtime-1.1.1.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/startup/startup-runtime/1.1.1/startup-runtime-1.1.1.pom
+
+androidx.tracing:tracing:1.2.0 (tracing-1.2.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/tracing/tracing/1.2.0/tracing-1.2.0.pom
+
+androidx.versionedparcelable:versionedparcelable:1.1.1 (versionedparcelable-1.1.1.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/versionedparcelable/versionedparcelable/1.1.1/versionedparcelable-1.1.1.pom
+
+androidx.window:window-core-android:1.5.0 (window-core.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/window/window-core-android/1.5.0/window-core-android-1.5.0.pom
+
+androidx.window:window:1.5.0 (window-1.5.0.aar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://dl.google.com/dl/android/maven2/androidx/window/window/1.5.0/window-1.5.0.pom
+
+com.google.guava:listenablefuture:1.0 (listenablefuture-1.0.jar)
+Declared license: [('The Apache Software License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://repo.maven.apache.org/maven2/com/google/guava/guava-parent/26.0-android/guava-parent-26.0-android.pom
+
+org.jetbrains.kotlin:kotlin-stdlib:2.2.10 (kotlin-stdlib-2.2.10.jar)
+Declared license: [('The Apache License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.2.10/kotlin-stdlib-2.2.10.pom
+
+org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0 (kotlinx-coroutines-android-1.9.0.jar)
+Declared license: [('The Apache Software License, Version 2.0', 'https://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://repo.maven.apache.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-android/1.9.0/kotlinx-coroutines-android-1.9.0.pom
+
+org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0 (kotlinx-coroutines-core-jvm-1.9.0.jar)
+Declared license: [('The Apache Software License, Version 2.0', 'https://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://repo.maven.apache.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.9.0/kotlinx-coroutines-core-jvm-1.9.0.pom
+
+org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.7.3 (kotlinx-serialization-core-jvm-1.7.3.jar)
+Declared license: [('The Apache Software License, Version 2.0', 'https://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://repo.maven.apache.org/maven2/org/jetbrains/kotlinx/kotlinx-serialization-core-jvm/1.7.3/kotlinx-serialization-core-jvm-1.7.3.pom
+
+org.jetbrains:annotations:23.0.0 (annotations-23.0.0.jar)
+Declared license: [('The Apache Software License, Version 2.0', 'https://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://repo.maven.apache.org/maven2/org/jetbrains/annotations/23.0.0/annotations-23.0.0.pom
+
+org.jspecify:jspecify:1.0.0 (jspecify-1.0.0.jar)
+Declared license: [('The Apache License, Version 2.0', 'http://www.apache.org/licenses/LICENSE-2.0.txt')]
+Declaration: https://repo.maven.apache.org/maven2/org/jspecify/jspecify/1.0.0/jspecify-1.0.0.pom

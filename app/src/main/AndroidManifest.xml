@@ -8,7 +8,7 @@
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <application android:label="Thermal Field" android:icon="@mipmap/ic_launcher" android:theme="@style/AppTheme"
         android:allowBackup="false" android:supportsRtl="true" android:usesCleartextTraffic="true">
-        <activity android:name=".MainActivity" android:exported="true"
+        <activity android:name="com.thereprocase.thermalfield.MainActivity" android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:launchMode="singleTop">
             <intent-filter>

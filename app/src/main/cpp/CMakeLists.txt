@@ -38,3 +38,10 @@ target_include_directories(thermal_core PRIVATE ${WORKBENCH}/native)
 target_link_libraries(thermal_core PRIVATE uvc usb android log EGL GLESv3)
 target_link_options(thermal_core PRIVATE "-Wl,-z,max-page-size=16384")
 target_link_options(usb PRIVATE "-Wl,-z,max-page-size=16384")
+
+# Compiler diagnostics and assertion strings retain source-relative locations
+# without publishing a developer workstation path in the native binaries.
+foreach(component usb uvc thermal_core)
+    target_compile_options(${component} PRIVATE "-ffile-prefix-map=${WORKBENCH}=." "-fdebug-prefix-map=${WORKBENCH}=."
+        "-ffile-prefix-map=${CMAKE_ANDROID_NDK}=ndk" "-fdebug-prefix-map=${CMAKE_ANDROID_NDK}=ndk")
+endforeach()

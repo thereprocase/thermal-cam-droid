@@ -4,6 +4,8 @@ An independent, open-source Android thermal viewer for the USB device `0bda:5830
 
 **Development preview.** Live USB, experimental network capture and host radiometric correction have run on a Pixel 9 Pro. Measurement tools are implemented and undergoing device qualification. Comparison against the official app on ice-water and approximately 55 °C water targets has **not** been completed; camera-apparent and model-corrected values are not independently validated surface temperatures.
 
+[Download the arm64 Android APK](https://github.com/thereprocase/thermal-cam-droid/releases/download/v0.1.0/ThermalField-0.1.0-arm64-v8a.apk) · [Release notes and source archive](https://github.com/thereprocase/thermal-cam-droid/releases/tag/v0.1.0) · [Project page and screenshots](https://thereprocase.github.io/projects/thermal-field/)
+
 ## Current features
 
 - Native USB capture through Android UsbManager, a borrowed file descriptor, libusb and libuvc. No proprietary camera SDK.
@@ -81,3 +83,5 @@ For a phone, bind explicitly to a trusted LAN or Tailscale interface and enter `
 No account, analytics or cloud service is required. There is no location permission. Exports omit persistent camera identifiers and the network URL. Network addresses remain local app preferences. A user's scene and timestamp can still be identifying: review your own images before sharing or publishing them. Public examples use original synthetic data.
 
 Project code is MIT; dependencies retain their own licenses. libusb is a separately built LGPL-2.1-or-later shared library, with corresponding source and Android build rules included under `third_party/libusb`. See [NOTICE](NOTICE.md) before reusing or redistributing. No vendor product images, logos, proprietary camera libraries or GPL application code are included. Camera names identify compatibility only.
+
+Published APKs use a project-specific release signer. Development builds use a different signer; Android cannot update an installation signed with another key. Preserve your captures before changing installation types. See [release/build instructions](docs/RELEASE.md) and the in-app Licenses and notices pane. A CI template is included; activation is pending GitHub workflow authorization. Versioned GitHub Releases contain the signed installer.

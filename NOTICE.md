@@ -33,10 +33,16 @@ thermal-camera-android: root LICENSE/COPYING and application-source license head
 | AndroidX / Compose | Versions pinned in `app/build.gradle.kts` | Apache-2.0; upstream AndroidX distribution notices. |
 | Kotlin | Plugin version pinned in root Gradle KTS | Apache-2.0; upstream distribution notices. |
 | Gradle wrapper | 9.6.1 | Apache-2.0; build tooling. |
-| Android NDK C++ runtime | NDK r28c | LLVM Apache-2.0 with LLVM exception and applicable bundled notices; redistribution notice audit remains open before an APK release. |
+| Android NDK C++ runtime | NDK r28c | LLVM Apache-2.0 with LLVM exception and legacy LLVM text, packaged in `assets/licenses/LLVM-runtime.txt`. |
+| utlist | Header 1.9.1, included by libuvc | BSD notice preserved in the header and `assets/licenses/utlist-BSD.txt`. |
+| Runtime Maven artifacts | Resolved release inventory | Primary license declarations and embedded notices recorded in `docs/RUNTIME_DEPENDENCIES.txt` and `assets/licenses/runtime-dependencies.txt`; Apache-2.0 text is packaged separately. |
 
-The separate `libusb.so` is linked dynamically. Corresponding library source and build rules are supplied here. Recipients retain the LGPL rights to modify/replace/relink the library; the MIT project license does not restrict those rights. The remaining source-notice and APK notice audit is a release gate, not a claim that this summary substitutes for full dependency texts.
+The separate `libusb.so` is linked dynamically. Corresponding library source and build rules are supplied here. Recipients retain the LGPL rights to modify/replace/relink the library; the MIT project license does not restrict those rights. Preserved native source-header notices, dependency declarations/full embedded notices, license texts and font notices are included in APK assets. See docs/RELEASE.md for source/rebuild/signing details. This summary does not substitute for the full dependency texts.
 
 FFmpeg is a separately installed desktop diagnostic/bridge executable; it is not bundled in the APK or this source tree. Its installed build determines its own license. The bridge uses Python's standard library and the system libusb runtime through ctypes.
 
 An original vector icon and synthetic scene were created for this project. No GPL application source, unlicensed Android reference implementation, vendor image or proprietary camera SDK was copied into the app.
+
+## Build automation
+
+GitHub Actions checkout v5, setup-java v4 and upload-artifact v4 are MIT-licensed upstream actions, referenced at immutable commit hashes in docs/ci-template.yml. They are build automation, not APK libraries. Hosted CI activation is pending a credential with workflow scope. The AndroidX graphics-path runtime includes a third arm64 native library; its Maven declaration is Apache-2.0 and inspected native source-header attributions are packaged in assets/licenses/androidx-native-path.txt.

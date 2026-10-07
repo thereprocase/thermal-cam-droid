@@ -1,6 +1,13 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+val releaseSigning = Properties().apply {
+    val settings = rootProject.file("private/signing.properties")
+    if (settings.isFile) settings.inputStream().use { load(it) }
 }
 
 android {
@@ -8,7 +15,7 @@ android {
     compileSdk = 37
     ndkVersion = "28.2.13676358"
     defaultConfig {
-        applicationId = "com.thereprocase.thermalfield"
+        applicationId = providers.gradleProperty("validationApplicationId").orElse("com.thereprocase.thermalfield").get()
         minSdk = 36
         targetSdk = 37
         versionCode = 1
@@ -28,11 +35,32 @@ android {
         cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" }
     }
     buildFeatures { compose = true; buildConfig = true }
+    if (releaseSigning.isNotEmpty()) {
+        signingConfigs.create("projectRelease") {
+            storeFile = rootProject.file(releaseSigning.getProperty("storeFile"))
+            storePassword = releaseSigning.getProperty("storePassword")
+            keyAlias = releaseSigning.getProperty("keyAlias")
+            keyPassword = releaseSigning.getProperty("keyPassword")
+        }
+        buildTypes.getByName("release").signingConfig = signingConfigs.getByName("projectRelease")
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     packaging { jniLibs { useLegacyPackaging = false } }
+}
+
+tasks.register("runtimeLicenseInventory") {
+    doLast {
+        val entries = configurations.getByName("releaseRuntimeClasspath").resolvedConfiguration.resolvedArtifacts
+            .sortedBy { it.moduleVersion.id.toString() }
+            .joinToString("\n") { "${it.moduleVersion.id}\t${it.file.absolutePath}" }
+        val destination = layout.buildDirectory.file("runtime-artifacts.tsv").get().asFile
+        destination.parentFile.mkdirs()
+        destination.writeText(entries + "\n")
+        println("Resolved runtime artifact inventory written under the build directory")
+    }
 }
 
 dependencies {

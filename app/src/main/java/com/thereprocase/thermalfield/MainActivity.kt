@@ -30,6 +30,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.TextStyle
@@ -182,6 +185,17 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
     var isothermMode by remember { mutableStateOf(1) }
     var isothermLower by remember { mutableStateOf("20") }; var isothermUpper by remember { mutableStateOf("30") }
     var isothermError by remember { mutableStateOf("") }
+    var licenseDialog by remember { mutableStateOf(false) }
+    var licenseFile by remember { mutableStateOf("") }
+    var licenseText by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val licenseFiles = remember { context.assets.list("licenses")?.sorted() ?: emptyList() }
+    LaunchedEffect(licenseDialog, licenseFile) {
+        if (licenseDialog && licenseFile in licenseFiles) {
+            licenseText = "Loading…"
+            licenseText = withContext(Dispatchers.IO) { context.assets.open("licenses/$licenseFile").bufferedReader().use { it.readText() } }
+        }
+    }
     if (state.fullScreen) { FullScreenView(state, model, surfaceCreated); return }
     val compact = LocalConfiguration.current.screenWidthDp > LocalConfiguration.current.screenHeightDp
     Column(Modifier.fillMaxSize().background(Gray).safeDrawingPadding()) {
@@ -291,6 +305,10 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                 Label(String.format(Locale.US, "%.2f fps · %d received / %d rendered\n%d source gaps · %d malformed · %d overflow\nCallback → swap %.2f ms\n%s", frame.fps, frame.received, frame.rendered, frame.sourceSequenceGaps, frame.malformed, frame.overflow, frame.swapMs,
                     if (frame.presentationSamples > 0) String.format(Locale.US, "Callback → presentation %.2f ms", frame.presentationMs) else "Presentation timestamp unavailable"), Modifier.padding(12.dp), mono = true)
             }
+            Pane("ABOUT / OPEN SOURCE") {
+                Label("Thermal Field ${BuildConfig.VERSION_NAME} · development preview", Modifier.padding(12.dp))
+                Action("Licenses and notices", modifier = Modifier.padding(12.dp)) { licenseFile = ""; licenseDialog = true; model.editing(true) }
+            }
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val availableHeight = maxHeight
@@ -330,6 +348,15 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
         }
         Label(if (compact && state.captureMessage.isNotEmpty()) "$status · ${state.captureMessage}" else status,
             Modifier.fillMaxWidth().border(1.dp, Rule).background(Light).padding(horizontal = 12.dp, vertical = if (compact) 6.dp else 12.dp), mono = true, size = if (compact) 12 else 14)
+    }
+    if (licenseDialog) Dialog(onDismissRequest = { licenseDialog = false; model.editing(false) }) {
+        Pane("LICENSES / NOTICES") {
+            Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (licenseFile.isEmpty()) licenseFiles.forEach { filename -> Action(filename) { licenseFile = filename } }
+                else { Action("Back to license list") { licenseFile = "" }; Label(licenseText, mono = true, size = 11) }
+                Action("Close") { licenseDialog = false; model.editing(false) }
+            }
+        }
     }
     if (sharing && state.lastCapture != null) Dialog(onDismissRequest = { sharing = false }) {
         Pane("SHARE CAPTURE") {
