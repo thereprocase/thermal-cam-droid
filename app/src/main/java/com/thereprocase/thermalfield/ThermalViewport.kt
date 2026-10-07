@@ -9,8 +9,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.viewinterop.AndroidView
 import java.util.Locale
 
@@ -60,8 +58,8 @@ import java.util.Locale
                 }
             } else if (verticalBar >= 64.dp) {
                 Column(Modifier.align(Alignment.CenterStart).width(minOf(verticalBar, 140.dp)).padding(4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Action("+90°", enabled = !state.profileApplying, modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Rotate camera image clockwise 90 degrees" }) { model.rotate() }
-                    Action("180°", state.flip, enabled = !state.profileApplying, modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Flip camera image 180 degrees" }) { model.flip() }
+                    Action("+90°", enabled = !state.profileApplying, modifier = Modifier.fillMaxWidth(), accessibilityLabel = "Rotate camera image clockwise 90 degrees") { model.rotate() }
+                    Action("180°", state.flip, enabled = !state.profileApplying, modifier = Modifier.fillMaxWidth(), accessibilityLabel = "Flip camera image 180 degrees") { model.flip() }
                 }
             }
         }
@@ -69,8 +67,8 @@ import java.util.Locale
             Box(Modifier.matchParentSize().background(Light), contentAlignment = Alignment.Center) {
                 Label(if (state.busy) "CONNECTING" else "NO SIGNAL", mono = true, size = 18)
             }
-        } else if (state.busy || state.frame.ageMs > 300 || state.frame.unchangedMs > 300 && !state.fixture && !state.archive) {
-            val badge = when {
+        } else if (state.busy || nucNotice(state, state.frame.observedAtMillis) != null || state.frame.ageMs > 300 || state.frame.unchangedMs > 300 && !state.fixture && !state.archive) {
+            val badge = nucNotice(state, state.frame.observedAtMillis) ?: when {
                 state.busy -> state.status
                 state.frame.ageMs > 300 -> "FRAME STALLED · LAST IMAGE"
                 else -> "LIVE TRANSPORT · DATA UNCHANGED"
@@ -96,9 +94,11 @@ import java.util.Locale
         }
         Column(Modifier.align(Alignment.BottomCenter).safeDrawingPadding().background(Light.copy(alpha = .9f)).padding(6.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Action("+90°", enabled = !state.profileApplying, modifier = Modifier.semantics { contentDescription = "Rotate camera image clockwise 90 degrees" }) { model.rotate() }
-                Action("Flip", state.flip, enabled = !state.profileApplying, modifier = Modifier.semantics { contentDescription = "Flip camera image 180 degrees" }) { model.flip() }
+                Action("+90°", enabled = !state.profileApplying, accessibilityLabel = "Rotate camera image clockwise 90 degrees") { model.rotate() }
+                Action("Flip", state.flip, enabled = !state.profileApplying, accessibilityLabel = "Flip camera image 180 degrees") { model.flip() }
                 Action("Lock", state.rotationLocked) { model.rotationLock() }
+                Action("NUC", enabled = state.connected && !state.busy,
+                    accessibilityLabel = "Send NUC shutter command") { model.command(true) }
             }
             val source = if (state.archive) "SAVED" else if (state.fixture) "DEMO · SYNTHETIC" else if (state.network) "NETWORK" else "USB"
             Label("$source · ${if (state.corrected) "Corrected" else "Apparent"} · ${temperature(state.frame.center, state.fahrenheit)} · ${if (state.measurementTool == 0) "View" else "Measurement tool active"}", size = 12)

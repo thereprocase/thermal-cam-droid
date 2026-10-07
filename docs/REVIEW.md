@@ -22,7 +22,7 @@ An independent Claude/Frodo source review on 2026-10-06 examined the development
 
 Saved-capture browsing/reanalysis is implemented and has synthetic Pixel export/reopen checks. Firmware/register context preservation and source-generation recovery checks are recorded in VALIDATION.md. Ten network Home/return cycles completed, with bounded descriptor samples and seven recorded bridge sequence gaps; this does not qualify physical cable recovery or loss-free delivery.
 
-Still open: broader layout/lifecycle qualification, measurement naming, source setup and permanent-permission errors, dense label collision cases, visible NUC history, final-build attach/detach evidence and gain behavior during share handoff. These are tracked by the repository acceptance checklist. Source changes require device verification; this table alone is not acceptance evidence.
+Still open: broader layout/lifecycle qualification, measurement naming, source setup and permanent-permission errors, dense label collision cases, physical NUC/freeze qualification, final-build attach/detach evidence and gain behavior during share handoff. These are tracked by the repository acceptance checklist. Source changes require device verification; this table alone is not acceptance evidence.
 
 ## Third Frodo review
 
@@ -44,3 +44,5 @@ Prioritized follow-up:
 Other notes include active measurement tools being hidden in full screen, displaced export labels lacking leader lines, archive repainting an unchanged plane at 25 Hz, ambiguous share-target capture identity, NUC history, large-text/TalkBack coverage and splitting the large screen composable into smaller pieces. Delta between region means is a product extension. The separate Save raw action is now accurately described; whether it deserves a capture-bar slot is a product choice.
 
 Source findings require appropriate regression checks before being marked fixed. Physical USB recovery, baseline persistence, sensor NUC/gain behavior and official-app bath comparisons remain open. The full reviewer report is retained privately; this summary contains no device identifiers or private network details.
+
+Manual NUC feedback follow-up: the Camera panel now retains command pending/completed/failed history for the current source session, and full screen exposes a NUC action. A brief command-context banner can accompany observed delivery pauses or repeated radiometric samples. The wording separates command acknowledgement from shutter movement/calibration; physical freeze qualification remains open.

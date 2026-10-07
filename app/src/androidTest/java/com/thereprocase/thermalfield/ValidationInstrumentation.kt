@@ -924,6 +924,17 @@ class ValidationInstrumentation : Instrumentation() {
                 first.paused.set(false)
                 awaitConnected(first.address)
                 check(!canRestartStalledSource(model.state.value)) { "Recovery remained eligible after fresh delivery" }
+                runOnMainSync { model.command(nuc = true) }
+                val nucDeadline = SystemClock.elapsedRealtime()+5000
+                while (model.state.value.nuc.phase == NucPhase.REQUESTED && SystemClock.elapsedRealtime()<nucDeadline) SystemClock.sleep(20)
+                check(model.state.value.nuc.phase == NucPhase.COMPLETED && first.controls.get() == 1) { "NUC acknowledgement was not retained" }
+                first.controlStatus.set(503)
+                runOnMainSync { model.command(nuc = true) }
+                val failureDeadline = SystemClock.elapsedRealtime()+5000
+                while (model.state.value.nuc.phase == NucPhase.REQUESTED && SystemClock.elapsedRealtime()<failureDeadline) SystemClock.sleep(20)
+                check(model.state.value.nuc.phase == NucPhase.FAILED && first.controls.get() == 2 && model.state.value.nuc.error.contains("503")) { "Rejected NUC was not reported as failed" }
+                first.controlStatus.set(204)
+                val previousControls = first.controls.get()
                 // Occupy the real command executor to force the queued case;
                 // ordinary gesture timing cannot reliably reproduce this race.
                 val field = CameraViewModel::class.java.getDeclaredField("worker").apply { isAccessible = true }
@@ -933,18 +944,22 @@ class ValidationInstrumentation : Instrumentation() {
                 check(blocked.await(2, TimeUnit.SECONDS))
                 runOnMainSync {
                     check(model.state.value.network && model.state.value.networkUrl == first.address)
-                    model.command(nuc = true); model.network(second.address)
+                    model.command(nuc = true)
+                    check(model.state.value.nuc.phase == NucPhase.REQUESTED)
+                    model.network(second.address)
+                    check(model.state.value.nuc.phase == NucPhase.NONE)
                 }
                 release.countDown()
                 awaitConnected(second.address)
-                check(first.controls.get() == 0 && second.controls.get() == 0) { "Cancelled queued control reached a bridge" }
+                check(first.controls.get() == previousControls && second.controls.get() == 0) { "Cancelled queued control reached a bridge" }
+                check(model.state.value.nuc.phase == NucPhase.NONE) { "NUC history leaked into the replacement source" }
                 runOnMainSync {
                     check(model.state.value.network && model.state.value.networkUrl == second.address)
                     model.command(nuc = false, high = true)
                 }
                 val deadline = SystemClock.elapsedRealtime() + 5000
                 while ((!model.state.value.gainKnown || model.state.value.busy) && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(20)
-                check(first.controls.get() == 0 && second.controls.get() == 1 && model.state.value.gainKnown && !model.state.value.busy) { "Current control did not reach its selected bridge" }
+                check(first.controls.get() == previousControls && second.controls.get() == 1 && model.state.value.gainKnown && !model.state.value.busy) { "Current control did not reach its selected bridge" }
                 runOnMainSync { model.fixture() }
                 val fixtureDeadline = SystemClock.elapsedRealtime() + 5000
                 while ((!model.state.value.fixture || model.state.value.busy || model.state.value.frame.frame == 0L) && SystemClock.elapsedRealtime() < fixtureDeadline) SystemClock.sleep(20)

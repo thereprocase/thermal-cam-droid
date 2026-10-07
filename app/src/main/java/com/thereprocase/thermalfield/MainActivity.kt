@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
@@ -186,9 +188,14 @@ class MainActivity : ComponentActivity() {
     BasicText(text, modifier, style = TextStyle(color = color, fontFamily = if (mono) Mono else Sans, fontSize = size.sp, lineHeight = (size * 1.4).sp))
 }
 
-@Composable internal fun Action(text: String, selected: Boolean? = null, enabled: Boolean = true, modifier: Modifier = Modifier, action: () -> Unit) {
+@Composable internal fun Action(text: String, selected: Boolean? = null, enabled: Boolean = true, modifier: Modifier = Modifier, accessibilityLabel: String? = null, action: () -> Unit) {
     Box(modifier.defaultMinSize(minHeight = 48.dp).border(1.dp, if (enabled) Blue else Rule)
-        .background(if (selected == true) Blue else Color.White).semantics { if (selected != null) stateDescription = if (selected) "Selected" else "Not selected" }
+        .background(if (selected == true) Blue else Color.White).semantics(mergeDescendants = true) {
+            role = Role.Button
+            if (accessibilityLabel != null) contentDescription = accessibilityLabel
+            if (!enabled) disabled()
+            if (selected != null) stateDescription = if (selected) "Selected" else "Not selected"
+        }
         .clickable(enabled = enabled, role = Role.Button, onClick = action).padding(horizontal = 12.dp, vertical = 12.dp)) {
         Label(text, color = if (!enabled) Rule else if (selected == true) Color.White else Blue)
     }
@@ -201,7 +208,7 @@ class MainActivity : ComponentActivity() {
         BasicTextField(value, change, Modifier.weight(1f).border(1.dp, Rule).background(Color.White).padding(12.dp),
             textStyle = TextStyle(fontFamily = Mono, color = Ink, fontSize = 16.sp),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
-        Action("±", modifier = Modifier.widthIn(min = 48.dp).semantics { contentDescription = "Change temperature sign" }) {
+        Action("±", modifier = Modifier.widthIn(min = 48.dp), accessibilityLabel = "Change temperature sign") {
             change(if (value.startsWith("-")) value.removePrefix("-") else "-${value.removePrefix("+")}")
         }
     }
@@ -344,6 +351,7 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                     Action("Captures", modifier = Modifier.weight(1f)) { model.refreshGallery(); galleryDialog = true; model.editing(true) }
                     if (BuildConfig.DEBUG) Action("Debug frame dump", enabled = state.frame.frame > 0, modifier = Modifier.weight(1f)) { model.dumpFrame() }
                 }
+                Label(nucHistory(state.nuc, state.frame.observedAtMillis), Modifier.padding(horizontal = 12.dp, vertical = 6.dp), size = 12)
                 if (state.firmware.isNotEmpty()) Label("Firmware ${state.firmware}", Modifier.padding(12.dp), mono = true)
             }
             if (controlCategory == "Info") Pane("PERFORMANCE / DIAGNOSTIC") {

@@ -16,6 +16,7 @@ internal class MockRadiometricBridge(private val frame: ByteArray) : AutoCloseab
     private val stopped = AtomicBoolean(false)
     private val clients = ConcurrentHashMap.newKeySet<Socket>()
     val controls = AtomicInteger(0)
+    val controlStatus = AtomicInteger(204)
     val streams = AtomicInteger(0)
     val paused = AtomicBoolean(false)
     val address = "http://127.0.0.1:${listener.localPort}/radiometric"
@@ -36,7 +37,8 @@ internal class MockRadiometricBridge(private val frame: ByteArray) : AutoCloseab
             val output = client.getOutputStream()
             if (request.startsWith("POST /control ")) {
                 controls.incrementAndGet()
-                output.write("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+                val status = controlStatus.get()
+                output.write("HTTP/1.1 $status ${if (status == 204) "No Content" else "Service Unavailable"}\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
                 output.flush()
             } else if (request.startsWith("GET /radiometric ")) {
                 streams.incrementAndGet()

@@ -36,7 +36,7 @@ data class FrameTelemetry(
     val malformed: Long = 0, val overflow: Long = 0, val fps: Double = 0.0,
     val sourceSequenceGaps: Long = 0, val gainReadback: Int = -1, val commandActive: Boolean = false,
     val invalidPixels: Int = 0,
-    val ageMs: Double = -1.0, val unchangedMs: Double = -1.0,
+    val ageMs: Double = -1.0, val unchangedMs: Double = -1.0, val observedAtMillis: Long = 0,
     val swapMs: Double = 0.0, val presentationMs: Double = 0.0,
     val presentationSamples: Long = 0, val error: String = "",
     val emissivity: Double = Double.NaN, val reflectedCelsius: Double = Double.NaN, val corrected: Boolean = false,
@@ -66,6 +66,7 @@ data class CameraUiState(
     val profileApplying: Boolean = false,
     val profileRevision: Long = 0,
     val cameraPermissionMissing: Boolean = false,
+    internal val nuc: NucFeedback = NucFeedback(),
     val gallery: List<CaptureRecord> = emptyList(), val galleryLoading: Boolean = false, val galleryError: String = "",
 )
 
@@ -174,7 +175,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         emissivity = json.optDouble("emissivity", Double.NaN), reflectedCelsius = json.optDouble("reflected_apparent_celsius", Double.NaN), corrected = json.optBoolean("correction_applied"),
                         measurements = measurements(json), delta = json.optJSONObject("delta_t")?.optDouble("celsius", Double.NaN) ?: Double.NaN,
                         isothermPixels = json.optJSONObject("isotherm")?.optInt("matched_pixels") ?: 0,
-                        measurementVersion = json.optLong("measurement_version"), sourceGeneration = json.getLong("session_generation"),
+                        measurementVersion = json.optLong("measurement_version"), sourceGeneration = json.getLong("session_generation"), observedAtMillis = android.os.SystemClock.elapsedRealtime(),
                     )
                     mutableState.update { it.copy(frame = frame) }
                 } catch (error: Exception) { Log.e("ThermalField", "Telemetry read failed", error) }
@@ -184,6 +185,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun UsbDevice.isP2Pro() = vendorId == 0x0bda && productId == 0x5830
+
+    private fun nextSession(): Long {
+        val token = generation.incrementAndGet()
+        mutableState.update { it.copy(nuc = NucFeedback()) }
+        return token
+    }
 
     private fun updateSession(token: Long, change: (CameraUiState) -> CameraUiState) {
         // A callback can cross stop/start while native work is in progress.
@@ -260,7 +267,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (manager.hasPermission(device)) open(device)
         else {
             requestedDevice = device.deviceName
-            val token = generation.incrementAndGet()
+            val token = nextSession()
             mutableState.update { it.copy(status = "Waiting for USB permission") }
             worker.execute {
                 try { restoreLiveProfile(token) }
@@ -277,7 +284,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun open(device: UsbDevice) {
         if (!started || !surfaceReady) return
-        val token = generation.incrementAndGet()
+        val token = nextSession()
         activeDevice = device.deviceName
         mutableState.update { it.copy(status = "Opening camera", busy = true, gainKnown = false) }
         worker.execute {
@@ -314,7 +321,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun disconnect(message: String = "Disconnected", keepSource: Boolean = false) {
         if (!keepSource) { fixtureSelected = false; networkSelected = false; leaveSavedProfile() }
         networkFrames?.close()
-        val token = generation.incrementAndGet(); requestedDevice = null; activeDevice = null
+        val token = nextSession(); requestedDevice = null; activeDevice = null
         bridge.cancel(engine)
         mutableState.update { it.copy(status = message, connected = false, busy = false, fixture = false, network = false, archive = false, gainKnown = false) }
         worker.execute {
@@ -329,7 +336,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         fixtureSelected = true
         networkSelected = false
         if (!surfaceReady || !started) return
-        val token = generation.incrementAndGet()
+        val token = nextSession()
         bridge.cancel(engine)
         mutableState.update { it.copy(status = "Fixture replay", fixture = true, connected = false, busy = true, network = false, archive = false, gainKnown = false, serial = "", firmware = "") }
         worker.execute {
@@ -364,7 +371,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         networkSelected = true; fixtureSelected = false
         mutableState.update { it.copy(networkUrl = address) }; preferences.edit().putString("networkUrl", address).apply()
         if (!started || !surfaceReady) return
-        val token = generation.incrementAndGet(); bridge.cancel(engine); networkFrames?.close()
+        val token = nextSession(); bridge.cancel(engine); networkFrames?.close()
         mutableState.update { it.copy(status = "Connecting network stream", connected = false, network = true, fixture = false, archive = false, busy = true, gainKnown = false, serial = "", firmware = "") }
         worker.execute {
             closeConnection()
@@ -404,7 +411,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (!requested.connected || requested.busy) return
         val token = generation.get()
         pendingCommandSession.set(token)
-        mutableState.update { it.copy(status = if (nuc) "Calibration command" else "Changing gain", busy = true) }
+        mutableState.update { it.copy(status = if (nuc) "NUC command pending" else "Changing gain", busy = true,
+            nuc = if (nuc) NucFeedback(NucPhase.REQUESTED, android.os.SystemClock.elapsedRealtime()) else it.nuc) }
         worker.execute {
             try {
                 if (closed || !started || generation.get() != token) return@execute
@@ -415,10 +423,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         updateSession(token) { it.copy(captureMessage = "Gain changed, but its preference could not be saved") }
                 }
                 updateSession(token) { it.copy(status = "Live", busy = false,
-                    highGain = if (nuc) it.highGain else high, gainKnown = if (nuc) it.gainKnown else true) }
+                    highGain = if (nuc) it.highGain else high, gainKnown = if (nuc) it.gainKnown else true,
+                    nuc = if (nuc) NucFeedback(NucPhase.COMPLETED, android.os.SystemClock.elapsedRealtime()) else it.nuc) }
             } catch (error: Exception) {
                 updateSession(token) { it.copy(status = error.message ?: "Command failed", busy = false,
-                    gainKnown = if (!nuc && !requested.network) false else it.gainKnown) }
+                    gainKnown = if (!nuc && !requested.network) false else it.gainKnown,
+                    nuc = if (nuc) NucFeedback(NucPhase.FAILED, android.os.SystemClock.elapsedRealtime(), error.message ?: "Command failed") else it.nuc) }
                 Log.e("ThermalField", "Camera command failed", error)
             } finally { pendingCommandSession.compareAndSet(token, -1) }
         }
@@ -493,7 +503,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         archiveSelected = capture; fixtureSelected = false; networkSelected = false
         if (!started || !surfaceReady) return
-        val token = generation.incrementAndGet(); bridge.cancel(engine); networkFrames?.close()
+        val token = nextSession(); bridge.cancel(engine); networkFrames?.close()
         mutableState.update { it.copy(status = "Loading saved capture", connected = false, fixture = false, network = false, archive = false, busy = true, profileApplying = true) }
         worker.execute {
             try {

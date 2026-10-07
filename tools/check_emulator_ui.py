@@ -40,11 +40,25 @@ def main():
             time.sleep(0.5)
         raise AssertionError(f"Visible label missing: {label}")
 
+    def action_node(label_node, snapshot):
+        bounds = list(map(int, re.findall(r"\d+", label_node.get("bounds"))))
+        candidates = []
+        for node in snapshot:
+            if node.get("clickable") != "true":
+                continue
+            box = list(map(int, re.findall(r"\d+", node.get("bounds"))))
+            if box[0] <= bounds[0] and box[1] <= bounds[1] and box[2] >= bounds[2] and box[3] >= bounds[3]:
+                candidates.append(((box[2]-box[0])*(box[3]-box[1]), node))
+        if not candidates:
+            raise AssertionError("No clickable action contains the label")
+        return min(candidates, key=lambda item: item[0])[1]
+
     def tap(label, occurrence=0):
-        matches = [n for n in nodes() if label in (n.get("text"), n.get("content-desc"))]
+        snapshot = nodes()
+        matches = [n for n in snapshot if label in (n.get("text"), n.get("content-desc"))]
         if len(matches) <= occurrence:
             raise AssertionError(f"Visible control missing: {label}")
-        node = matches[occurrence]
+        node = action_node(matches[occurrence], snapshot)
         if node.get("enabled") != "true":
             raise AssertionError(f"Control disabled: {label}")
         x0, y0, x1, y1 = map(int, re.findall(r"\d+", node.get("bounds")))
@@ -77,7 +91,10 @@ def main():
     tap("Full screen")
     if find("Viewing full screen", nodes()) is not None:
         tap("Got it")
-    require("Exit full screen")
+    full_screen = require("Exit full screen")
+    nuc = find("Send NUC shutter command", full_screen)
+    if nuc is None or action_node(nuc, full_screen).get("enabled") != "false":
+        raise AssertionError("Full-screen NUC should be visible and disabled for Demo")
     adb("shell", "input", "keyevent", "KEYCODE_BACK")
     require("Full screen")
     tap("Full screen")
@@ -155,7 +172,7 @@ def main():
     adb("shell", "am", "start", "-n", f"{PACKAGE}/com.thereprocase.thermalfield.MainActivity")
     require("SYNTHETIC · not a measurement")
     print(json.dumps({"source": "synthetic", "full_screen_button_and_back": "passed",
-                      "rotation_mirror_flip": "passed", "reflected_sign_button": "passed",
+                      "rotation_mirror_flip": "passed", "full_screen_nuc_disabled_for_demo": "passed", "reflected_sign_button": "passed",
                       "mode_specific_isotherm_fields_and_summary": "passed",
                       "home_return_source_label": "passed", "physical_camera_validation": "not tested"}))
 
