@@ -19,6 +19,8 @@ Add `-no-window` for headless operation; ADB screenshots and accessibility contr
 
 Check `emulator -accel-check` in the environment that will run the emulator. A sandbox can hide `/dev/kvm` even when the host supports KVM. Our initial sandboxed software CPU run crashed during boot; the host KVM run booted successfully. That observation does not establish that software emulation fails on other hosts. See Android's [acceleration documentation](https://developer.android.com/studio/run/emulator-acceleration).
 
+For development on a workstation with an accelerated GPU, prefer a verified `-gpu host` run over continuous SwiftShader rendering. The tested Intel host required its normal desktop display/Xauthority environment even for a headless AVD; use your own desktop environment rather than copying machine-specific paths. A run with `-cores 2` passed the integration checks with substantially lower observed CPU use. Results and sampling limits are in VALIDATION.md. Run Gradle with `--max-workers=2` when reducing host load, and close the test AVD with `adb -s emulator-5556 emu kill` when it is not needed. Keep SwiftShader as a compatibility option, not an unattended default live-preview loop.
+
 ## Build and check
 
 Follow the emulator commands in the [README](../README.md#build-and-install). `-PemulatorValidation=true` selects only x86_64, uses an isolated application ID and disables release variants. Explicit release-task requests with that option fail before building. Default device/release builds remain arm64-only. Both configurations write the same Gradle output paths, so install or copy an APK before switching configurations.

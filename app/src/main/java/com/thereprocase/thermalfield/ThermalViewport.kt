@@ -33,6 +33,12 @@ import java.util.Locale
                 else -> "LIVE TRANSPORT · DATA UNCHANGED"
             }
             Label(badge, Modifier.align(Alignment.TopCenter).background(Color(0xfffff4dc)).padding(8.dp), mono = true, size = 12)
+            if (canRestartStalledSource(state)) {
+                Column(Modifier.align(Alignment.Center).background(Light).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Label("No frames for at least 3 seconds · showing the last image", size = 12)
+                    Action("Reconnect stream") { model.restartStalledSource() }
+                }
+            }
         }
     }
 }

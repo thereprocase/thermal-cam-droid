@@ -395,6 +395,7 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
         val status = when {
             state.frame.error.isNotEmpty() -> state.frame.error
             state.busy -> state.status
+            canRestartStalledSource(state) -> "No frames for at least 3 seconds · use Reconnect stream on the image"
             state.connected && state.frame.ageMs > 300 -> "Frame delivery stalled"
             state.connected && state.frame.unchangedMs > 300 -> "Live transport · radiometric data unchanged"
             else -> state.status

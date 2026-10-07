@@ -688,7 +688,7 @@ class ValidationInstrumentation : Instrumentation() {
                     val deadline = SystemClock.elapsedRealtime() + 8000
                     while (SystemClock.elapsedRealtime() < deadline) {
                         val state = model.state.value
-                        if (state.network && state.networkUrl == address && state.connected && !state.busy && state.frame.received >= 10 && state.frame.frame > 0) return
+                        if (state.network && state.networkUrl == address && state.connected && !state.busy && state.frame.received >= 10 && state.frame.frame > 0 && state.frame.ageMs in 0.0..299.0) return
                         SystemClock.sleep(20)
                     }
                     error("Synthetic network source did not become ready")
@@ -714,6 +714,18 @@ class ValidationInstrumentation : Instrumentation() {
                 val resumeDeadline = SystemClock.elapsedRealtime() + 5000
                 while ((model.state.value.frame.received <= stalled.received || model.state.value.frame.ageMs >= 300) && SystemClock.elapsedRealtime() < resumeDeadline) SystemClock.sleep(20)
                 check(model.state.value.frame.received > stalled.received && model.state.value.frame.ageMs < 300) { "Frame delivery did not recover after a bounded synthetic pause" }
+                val previousStreams = first.streams.get()
+                first.paused.set(true)
+                val recoveryDeadline = SystemClock.elapsedRealtime()+6000
+                while (!canRestartStalledSource(model.state.value) && SystemClock.elapsedRealtime() < recoveryDeadline) SystemClock.sleep(20)
+                check(canRestartStalledSource(model.state.value)) { "Prolonged synthetic stall did not expose recovery" }
+                runOnMainSync { model.restartStalledSource() }
+                val reopenDeadline = SystemClock.elapsedRealtime()+6000
+                while (first.streams.get() == previousStreams && SystemClock.elapsedRealtime() < reopenDeadline) SystemClock.sleep(20)
+                check(first.streams.get() == previousStreams+1) { "Recovery did not reopen the selected bridge exactly once" }
+                first.paused.set(false)
+                awaitConnected(first.address)
+                check(!canRestartStalledSource(model.state.value)) { "Recovery remained eligible after fresh delivery" }
                 // Occupy the real command executor to force the queued case;
                 // ordinary gesture timing cannot reliably reproduce this race.
                 val field = CameraViewModel::class.java.getDeclaredField("worker").apply { isAccessible = true }

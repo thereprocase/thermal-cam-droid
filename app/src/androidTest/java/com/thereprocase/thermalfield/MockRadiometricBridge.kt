@@ -16,6 +16,7 @@ internal class MockRadiometricBridge(private val frame: ByteArray) : AutoCloseab
     private val stopped = AtomicBoolean(false)
     private val clients = ConcurrentHashMap.newKeySet<Socket>()
     val controls = AtomicInteger(0)
+    val streams = AtomicInteger(0)
     val paused = AtomicBoolean(false)
     val address = "http://127.0.0.1:${listener.localPort}/radiometric"
     private val accepting = Thread({
@@ -38,6 +39,7 @@ internal class MockRadiometricBridge(private val frame: ByteArray) : AutoCloseab
                 output.write("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
                 output.flush()
             } else if (request.startsWith("GET /radiometric ")) {
+                streams.incrementAndGet()
                 output.write(("HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=thermal-field\r\n" +
                     "X-Thermal-Protocol: thermal-field-v1\r\nX-Thermal-Format: yuyv-256x384-u16le-k64\r\nConnection: close\r\n\r\n").toByteArray(Charsets.US_ASCII))
                 var sequence = 0L

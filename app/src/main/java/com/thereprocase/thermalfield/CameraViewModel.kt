@@ -331,6 +331,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun cameraMode() { disconnect(); connect() }
+    fun restartStalledSource() {
+        val current = state.value
+        if (!canRestartStalledSource(current)) return
+        if (current.network) network(current.networkUrl) else cameraMode()
+    }
     // Android can deliver both an activity intent and a broadcast for one
     // attach. connect() preserves an existing open or permission request.
     fun cameraAttached() { if (networkSelected || fixtureSelected || archiveSelected != null) cameraMode() else connect() }
