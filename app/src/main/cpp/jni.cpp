@@ -14,9 +14,13 @@ std::shared_ptr<thermal::Engine> engine(jlong id) {
 void fail(JNIEnv* env,const std::exception& error){env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),error.what());}
 }
 #define JNI_METHOD(name) Java_com_thereprocase_thermalfield_NativeBridge_##name
-extern "C" JNIEXPORT void JNICALL JNI_METHOD(archive)(JNIEnv* env,jobject,jlong id,jbyteArray data,jlong timestamp,jstring source,jint gain) {
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(archive)(JNIEnv* env,jobject,jlong id,jbyteArray data,jlong timestamp,jstring source,jint gain,jstring firmware,jintArray original,jintArray configured) {
     try{std::vector<std::uint8_t> bytes(env->GetArrayLength(data));env->GetByteArrayRegion(data,0,bytes.size(),reinterpret_cast<jbyte*>(bytes.data()));
-        const char* chars=env->GetStringUTFChars(source,nullptr);std::string origin(chars);env->ReleaseStringUTFChars(source,chars);engine(id)->archive(bytes,timestamp,origin,gain);
+        const char* chars=env->GetStringUTFChars(source,nullptr);std::string origin(chars);env->ReleaseStringUTFChars(source,chars);
+        chars=env->GetStringUTFChars(firmware,nullptr);std::string version(chars);env->ReleaseStringUTFChars(firmware,chars);
+        std::vector<int> before(env->GetArrayLength(original)),after(env->GetArrayLength(configured));
+        env->GetIntArrayRegion(original,0,before.size(),before.data());env->GetIntArrayRegion(configured,0,after.size(),after.data());
+        engine(id)->archive(bytes,timestamp,origin,gain,version,before,after);
     }catch(const std::exception& e){fail(env,e);}
 }
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(restoreMeasurements)(JNIEnv* env,jobject,jlong id,jintArray data,jint first,jint second,jint isotherm,jfloat lower,jfloat upper) {

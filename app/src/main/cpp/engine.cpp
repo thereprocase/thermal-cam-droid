@@ -466,12 +466,24 @@ void Engine::replay(const std::vector<std::uint8_t>& bytes) {
         while(!cancelled_) {ingest(bytes.data(),bytes.size(),512);deadline+=std::chrono::milliseconds(40);std::this_thread::sleep_until(deadline);}
     });
 }
-void Engine::archive(const std::vector<std::uint8_t>& bytes,std::int64_t timestamp,const std::string& source,int gain) {
+void Engine::archive(const std::vector<std::uint8_t>& bytes,std::int64_t timestamp,const std::string& source,int gain,
+                     const std::string& firmware,const std::vector<int>& original,const std::vector<int>& configured) {
     if(bytes.size()!=CompositeBytes || timestamp<=0 || gain<-1 || gain>1)throw std::invalid_argument("Invalid saved capture");
+    if(firmware.size()>512)throw std::invalid_argument("Invalid saved firmware");
+    for(const auto* values:{&original,&configured}) {
+        if(!values->empty() && values->size()!=6)throw std::invalid_argument("Invalid saved register count");
+        for(int value:*values)if(value<0 || value>65535)throw std::invalid_argument("Invalid saved register value");
+    }
+    // Keep the original device context through repeated reanalysis without
+    // forwarding arbitrary sidecar fields such as serials or source addresses.
+    std::ostringstream context;context<<"{\"physical_baseline_verified\":false";
+    if(!firmware.empty())context<<",\"firmware\":"<<quote(firmware);
+    auto properties=[&context](const char* name,const std::vector<int>& values){if(values.empty())return;context<<",\""<<name<<"\":[";for(unsigned i=0;i<values.size();++i){if(i)context<<',';context<<values[i];}context<<']';};
+    properties("original_properties",original);properties("configured_properties",configured);context<<'}';
     std::lock_guard<std::mutex> operation(operation_mutex_);close_session();cancelled_=false;reset_frames(false);
     {
         std::lock_guard<std::mutex> lock(mutex_);archive_=true;archive_timestamp_=timestamp;gain_mode_=gain;
-        identity_="{\"source\":\"saved capture\",\"original_source_kind\":"+quote(source)+",\"original_timestamp_unix_ns\":"+std::to_string(timestamp)+",\"physical_baseline_verified\":false}";
+        identity_="{\"source\":\"saved capture\",\"original_source_kind\":"+quote(source)+",\"original_timestamp_unix_ns\":"+std::to_string(timestamp)+",\"original_device_context\":"+context.str()+",\"physical_baseline_verified\":false}";
     }
     // Repainting supports palette/correction edits. Repeated frames are a saved
     // plane, not new sensor acquisitions, and retain the original timestamp.

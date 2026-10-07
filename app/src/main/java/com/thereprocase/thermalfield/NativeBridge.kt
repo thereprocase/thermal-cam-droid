@@ -17,7 +17,7 @@ internal class NativeBridge {
     external fun measurementVersion(id: Long): Long
     external fun open(id: Long, fd: Int): String
     external fun replay(id: Long, frame: ByteArray)
-    external fun archive(id: Long, frame: ByteArray, timestamp: Long, originalSource: String, gain: Int)
+    external fun archive(id: Long, frame: ByteArray, timestamp: Long, originalSource: String, gain: Int, firmware: String, originalProperties: IntArray, configuredProperties: IntArray)
     external fun restoreMeasurements(id: Long, geometry: IntArray, first: Int, second: Int, isotherm: Int, lower: Float, upper: Float)
     external fun beginNetwork(id: Long)
     external fun networkFrame(id: Long, frame: ByteArray, sequence: Long)

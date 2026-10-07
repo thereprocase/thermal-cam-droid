@@ -72,7 +72,8 @@ public:
     std::uint64_t measurement_version();
     std::string open(int borrowed_fd);
     void replay(const std::vector<std::uint8_t>& composite);
-    void archive(const std::vector<std::uint8_t>& composite, std::int64_t timestamp, const std::string& original_source, int gain);
+    void archive(const std::vector<std::uint8_t>& composite, std::int64_t timestamp, const std::string& original_source, int gain,
+                 const std::string& firmware, const std::vector<int>& original_properties, const std::vector<int>& configured_properties);
     void restore_measurements(const std::vector<int>& geometry, unsigned first, unsigned second, int isotherm, float lower, float upper);
     void begin_network();
     void network_frame(const std::vector<std::uint8_t>& bytes, std::uint32_t sequence);

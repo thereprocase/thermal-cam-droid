@@ -4,11 +4,11 @@ An independent, open-source Android thermal viewer for the USB device `0bda:5830
 
 **Development preview.** Live USB, experimental network capture and host radiometric correction have run on a Pixel 9 Pro. Measurement tools are implemented and undergoing device qualification. Comparison against the official app on ice-water and approximately 55 °C water targets has **not** been completed; camera-apparent and model-corrected values are not independently validated surface temperatures.
 
-[Download the arm64 Android APK](https://github.com/thereprocase/thermal-cam-droid/releases/download/v0.1.0/ThermalField-0.1.0-arm64-v8a.apk) · [Release notes and source archive](https://github.com/thereprocase/thermal-cam-droid/releases/tag/v0.1.0) · [Project page and screenshots](https://thereprocase.github.io/projects/thermal-field/)
+[Download the arm64 Android APK](https://github.com/thereprocase/thermal-cam-droid/releases/download/v0.1.1/ThermalField-0.1.1-arm64-v8a.apk) · [Release notes and source archive](https://github.com/thereprocase/thermal-cam-droid/releases/tag/v0.1.1) · [Project page and screenshots](https://thereprocase.github.io/projects/thermal-field/)
 
 ## Current features
 
-The list describes the latest source. Saved-capture browsing/reanalysis was added after the v0.1.0 APK.
+The list describes the latest source. The v0.1.1 development APK includes saved-capture browsing/reanalysis.
 
 - Native USB capture through Android UsbManager, a borrowed file descriptor, libusb and libuvc. No proprietary camera SDK.
 - GPU rendering of the bottom 256 × 192 radiometric plane; the camera's AGC preview is ignored for display.
@@ -50,6 +50,17 @@ cmake -S . -B build/native
 cmake --build build/native
 ctest --test-dir build/native --output-on-failure
 ```
+
+The framework-only Android integration runner exercises native saved-frame rendering, firmware/register provenance, lossless export and MediaStore reopening on a connected device:
+
+```sh
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb shell am instrument -w com.thereprocase.thermalfield.test/com.thereprocase.thermalfield.ValidationInstrumentation
+```
+
+It creates and removes its own synthetic capture set. Its synthetic firmware/register inputs do not qualify physical camera accuracy.
 
 Native decoding is tested against a captured composite fixture. Radiometric PNG tests independently decode all 49,152 words and verify exact preservation. Synthetic radiometry tests verify numerical behavior, not camera accuracy.
 

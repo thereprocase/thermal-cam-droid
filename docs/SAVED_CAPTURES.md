@@ -14,7 +14,7 @@ Limits in this implementation:
 
 - Importing files from another installation through a file picker is not implemented. Android may restrict access to another app installation's MediaStore entries.
 - Incomplete sets or unreadable sidecars are skipped during listing; opening reports invalid PNGs or unsupported metadata rather than treating them as a new measurement.
-- Derived archive identity records original source kind and timestamp. It currently does not propagate the original device firmware or register arrays; retain the original sidecar for that context. Device serials and network addresses are omitted from app exports.
+- Derived archive identity records original source kind and timestamp. It preserves available original firmware and the six original/configured register readbacks in `identity.original_device_context`, including through further reanalysis. Missing fields remain missing; older derived exports that omitted them cannot reconstruct that context. The baseline remains explicitly unverified. Device serials and network addresses are omitted from app exports.
 - Gallery entries have text summaries. Thumbnails, deletion and custom annotation names are not implemented.
 
 Device checks and their limits are recorded in [VALIDATION.md](VALIDATION.md).

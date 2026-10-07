@@ -397,7 +397,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     mutableState.update { it.copy(emissivity = epsilon, reflectedCelsius = reflected, corrected = corrected, palette = palette, rotation = degrees/90, flip = false, mirror = mirror, automatic = automatic, lower = lower, upper = upper, deltaFirst = first, deltaSecond = second, isothermMode = mode, isothermLower = isoLower, isothermUpper = isoUpper, expectedMeasurementVersion = version, measurementTool = 0, selectedMeasurement = 0) }
                 }.get(10, java.util.concurrent.TimeUnit.SECONDS)
                 if (generation.get() != token || !started) return@execute
-                bridge.archive(engine, loaded.composite, m.getLong("timestamp_unix_ns"), original, gain)
+                val identity = m.optJSONObject("identity")
+                val deviceContext = if (m.optString("source") == "archive") identity?.optJSONObject("original_device_context") else identity
+                fun properties(name: String): IntArray {
+                    val values = deviceContext?.optJSONArray(name) ?: return IntArray(0)
+                    require(values.length() == 6) { "Invalid saved register count" }
+                    return IntArray(6) { values.getInt(it).also { value -> require(value in 0..65535) { "Invalid saved register value" } } }
+                }
+                bridge.archive(engine, loaded.composite, m.getLong("timestamp_unix_ns"), original, gain,
+                    deviceContext?.optString("firmware", "") ?: "", properties("original_properties"), properties("configured_properties"))
                 archiveLoaded = capture to loaded
                 mutableState.update { it.copy(status = "Saved capture · original frame", archive = true, archiveSynthetic = original == "fixture", busy = false, lastCapture = capture, highGain = gain == 1, gainKnown = gain >= 0) }
             } catch (error: Exception) {
