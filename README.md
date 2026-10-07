@@ -128,3 +128,5 @@ No account, analytics or cloud service is required. There is no location permiss
 Project code is MIT; dependencies retain their own licenses. libusb is a separately built LGPL-2.1-or-later shared library, with corresponding source and Android build rules included under `third_party/libusb`. See [NOTICE](NOTICE.md) before reusing or redistributing. No vendor product images, logos, proprietary camera libraries or GPL application code are included. Camera names identify compatibility only.
 
 Published APKs use a project-specific release signer. Development builds use a different signer; Android cannot update an installation signed with another key. Preserve your captures before changing installation types. See [release/build instructions](docs/RELEASE.md) and the in-app Licenses and notices pane. A CI template is included; activation is pending GitHub workflow authorization. Versioned GitHub Releases contain the signed installer.
+
+Protocol bytes and pinned source-file/line provenance: [PROTOCOL.md](docs/PROTOCOL.md). Original-scope completion and remaining acceptance gates: [ACCEPTANCE.md](docs/ACCEPTANCE.md).

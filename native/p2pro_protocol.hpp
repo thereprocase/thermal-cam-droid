@@ -1,5 +1,5 @@
 #pragma once
-// Independent wire codec for the future Android C++17 backend. Transport owns
+// Independent wire codec shared by Android C++17 capture and host tests. Transport owns
 // USB access; this module neither opens devices nor assumes permission models.
 #include <array>
 #include <cstddef>
