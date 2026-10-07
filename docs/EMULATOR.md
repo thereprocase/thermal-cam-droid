@@ -28,3 +28,15 @@ The framework integration runner checks native saved-frame rendering, lossless e
 The UI checker reads accessibility bounds to scroll the controls pane beneath the pinned thermal viewport. It rejects physical-device serials. A source-label check after Home/return is narrower than a rendering/freshness check; native integration and the separate lifecycle checker cover their respective paths.
 
 Do not use emulator frame rate or swap timing to claim the Pixel meets the 25 Hz target. Synthetic inputs and an emulator GPU do not reproduce the physical camera path.
+
+## Process-restart layout check
+
+After installing the emulator app and test APKs, run these phases in order:
+
+```sh
+adb -s emulator-5556 shell am instrument -w -e layout_restart seed com.thereprocase.thermalfield.emulator.test/com.thereprocase.thermalfield.ValidationInstrumentation
+adb -s emulator-5556 shell am force-stop com.thereprocase.thermalfield.emulator
+adb -s emulator-5556 shell am instrument -w -e layout_restart verify com.thereprocase.thermalfield.emulator.test/com.thereprocase.thermalfield.ValidationInstrumentation
+```
+
+Confirm the seed phase reports success before stopping the process. The verifier checks a different process ID and exact native layout restoration, then restores the original layout preference and removes its cache evidence. Complete the verify phase after a successful seed; the seed intentionally leaves the synthetic layout installed between phases. These optional phases reject a physical-device app package. The regular integration runner independently checks full-capacity layout restoration, clearing, invalid data and archive preference isolation.

@@ -440,6 +440,21 @@ std::string Engine::restore_live_profile() {
     return out.str();
 }
 void Engine::cancel() {cancelled_=true;condition_.notify_all();}
+std::string Engine::measurement_state() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto& m = settings_.measurements;
+    std::ostringstream out;
+    out << std::setprecision(12) << "{\"version\":1,\"next_id\":" << next_geometry_id_ << ",\"geometry\":[";
+    for (unsigned i = 0; i < m.count; ++i) {
+        const auto& g = m.geometry[i];
+        if (i) out << ',';
+        out << '[' << g.id << ',' << static_cast<int>(g.kind) << ',' << g.x0 << ',' << g.y0 << ',' << g.x1 << ',' << g.y1 << ']';
+    }
+    out << "],\"first\":" << m.delta_first << ",\"second\":" << m.delta_second
+        << ",\"isotherm\":" << (m.isotherm_enabled ? static_cast<int>(m.isotherm_mode) : 0)
+        << ",\"lower\":" << m.isotherm_lower << ",\"upper\":" << m.isotherm_upper << '}';
+    return out.str();
+}
 void Engine::close_session() {
     cancelled_=true;
     if (replay_thread_.joinable()) replay_thread_.join();
@@ -527,14 +542,15 @@ void Engine::archive(const std::vector<std::uint8_t>& bytes,std::int64_t timesta
     // plane, not new sensor acquisitions, and retain the original timestamp.
     replay_thread_=std::thread([this,bytes]{auto deadline=std::chrono::steady_clock::now();while(!cancelled_){ingest(bytes.data(),bytes.size(),512);deadline+=std::chrono::milliseconds(40);std::this_thread::sleep_until(deadline);}});
 }
-void Engine::restore_measurements(const std::vector<int>& geometry,unsigned first,unsigned second,int isotherm,float lower,float upper) {
+void Engine::restore_measurements(const std::vector<int>& geometry,unsigned first,unsigned second,int isotherm,float lower,float upper,unsigned next_id) {
     if(geometry.size()%6 || geometry.size()>p2pro::MaximumMeasurements*6)throw std::invalid_argument("Invalid saved measurement count");
     p2pro::MeasurementSettings candidate;candidate.count=geometry.size()/6;
     unsigned maximum=0;
     for(unsigned i=0;i<candidate.count;++i){const unsigned n=i*6;if(geometry[n]<=0 || geometry[n]==std::numeric_limits<int>::max())throw std::invalid_argument("Invalid saved measurement id");
         candidate.geometry[i]={unsigned(geometry[n]),static_cast<p2pro::MeasurementKind>(geometry[n+1]),geometry[n+2],geometry[n+3],geometry[n+4],geometry[n+5]};maximum=std::max(maximum,unsigned(geometry[n]));}
     candidate.delta_first=first;candidate.delta_second=second;candidate.isotherm_enabled=isotherm!=0;candidate.isotherm_mode=static_cast<p2pro::IsothermMode>(isotherm ? isotherm:1);candidate.isotherm_lower=lower;candidate.isotherm_upper=upper;p2pro::validate(candidate);
-    std::lock_guard<std::mutex> lock(mutex_);settings_.measurements=candidate;next_geometry_id_=maximum+1;++settings_.measurement_version;
+    if (next_id && (next_id <= maximum || next_id >= unsigned(std::numeric_limits<int>::max()))) throw std::invalid_argument("Invalid next measurement id");
+    std::lock_guard<std::mutex> lock(mutex_);settings_.measurements=candidate;next_geometry_id_=next_id ? next_id : maximum+1;++settings_.measurement_version;
 }
 void Engine::begin_network() {
     std::lock_guard<std::mutex> operation(operation_mutex_);close_session();cancelled_=false;reset_frames(false);

@@ -83,6 +83,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val measurementGeneration = AtomicLong(0)
     private val generation = AtomicLong(0)
     private val preferences = context.getSharedPreferences("display", Context.MODE_PRIVATE)
+    private val storedMeasurements = runCatching {
+        preferences.getString("measurementLayout", null)?.let(MeasurementLayout::decode)
+    }
     private val permissionAction = "${context.packageName}.USB_PERMISSION"
     private var connection: UsbDeviceConnection? = null
     private var activeDevice: String? = null
@@ -108,6 +111,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         automatic = preferences.getBoolean("automatic", true), lower = preferences.getFloat("lower", 20f), upper = preferences.getFloat("upper", 30f),
         emissivity = preferences.getFloat("emissivity", 1f).toDouble(), reflectedCelsius = preferences.getFloat("reflectedCelsius", 20f).toDouble(),
         corrected = preferences.getBoolean("corrected", false),
+        deltaFirst = storedMeasurements.getOrNull()?.first ?: 0,
+        deltaSecond = storedMeasurements.getOrNull()?.second ?: 0,
+        isothermMode = storedMeasurements.getOrNull()?.isotherm ?: 0,
+        isothermLower = storedMeasurements.getOrNull()?.lower ?: 20f,
+        isothermUpper = storedMeasurements.getOrNull()?.upper ?: 30f,
     ))
     val state = mutableState.asStateFlow()
 
@@ -137,6 +145,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }, Context.RECEIVER_NOT_EXPORTED)
         configure()
         state.value.let { correction(it.emissivity, it.reflectedCelsius, it.corrected) }
+        restoreStoredMeasurements()
         refreshGallery()
         viewModelScope.launch(Dispatchers.Default) {
             while (true) {
@@ -512,13 +521,42 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun measurementChange(operation: () -> Unit) {
         if (state.value.profileApplying) return
         val token = measurementGeneration.incrementAndGet()
+        val persistLive = archiveSelected == null
         mutableState.update { it.copy(measurementApplying = true) }
         correctionWorker.execute {
             if (closed) return@execute
-            try { operation() } catch (error: Exception) { message(error.message ?: "Measurement change failed") }
+            try {
+                operation()
+                if (persistLive) {
+                    val layout = bridge.measurementState(engine)
+                    MeasurementLayout.decode(layout)
+                    check(preferences.edit().putString("measurementLayout", layout).commit()) { "Measurement layout was not saved; changes remain in this session" }
+                }
+            } catch (error: Exception) { message(error.message ?: "Measurement change failed") }
             if (!closed && token == measurementGeneration.get()) {
                 val version = bridge.measurementVersion(engine)
                 mutableState.update { it.copy(measurementApplying = false, expectedMeasurementVersion = version) }
+            }
+        }
+    }
+    private fun restoreStoredMeasurements() {
+        val failure = storedMeasurements.exceptionOrNull()
+        if (failure != null) {
+            message("Stored measurements could not be restored: ${failure.message ?: "Invalid layout"}")
+            return
+        }
+        val layout = storedMeasurements.getOrNull() ?: return
+        val token = measurementGeneration.incrementAndGet()
+        mutableState.update { it.copy(measurementApplying = true) }
+        correctionWorker.execute {
+            if (closed) return@execute
+            try {
+                layout.restore(bridge, engine)
+                mutableState.update { it.copy(deltaFirst = layout.first, deltaSecond = layout.second,
+                    isothermMode = layout.isotherm, isothermLower = layout.lower, isothermUpper = layout.upper,
+                    expectedMeasurementVersion = bridge.measurementVersion(engine), measurementApplying = token != measurementGeneration.get()) }
+            } catch (error: Exception) {
+                mutableState.update { it.copy(measurementApplying = token != measurementGeneration.get(), captureMessage = "Stored measurements could not be restored: ${error.message ?: "Invalid layout"}") }
             }
         }
     }

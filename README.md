@@ -28,7 +28,7 @@ Source updates after 0.1.2 add queued-command cancellation/target retention, cle
 - Original synthetic demo for UI development, explicitly labeled as synthetic.
 - Experimental lossless network source from the included desktop bridge. This decoder requires original composites with thermal-field-v1 headers; other IP thermal camera formats need an adapter.
 
-Planned: importing captures from other installations, annotation naming/persistence across process restart and further lifecycle/accuracy qualification. See [saved-capture behavior](docs/SAVED_CAPTURES.md), [feature scope](docs/FEATURES.md) and [validation](docs/VALIDATION.md).
+Planned: importing captures from other installations, annotation naming and further lifecycle/accuracy qualification. See [saved-capture behavior](docs/SAVED_CAPTURES.md), [feature scope](docs/FEATURES.md) and [validation](docs/VALIDATION.md).
 
 <img src="docs/synthetic-export.png" width="320" alt="A rotated synthetic enclosure export with temperature markers, palette legend and an explicit synthetic-data caption">
 
@@ -90,7 +90,7 @@ Native decoding is tested against a captured composite fixture. Radiometric PNG 
 
 The remaining powered-device persistence, official-app water-bath and direct-USB lifecycle checks have a [physical bench procedure](docs/PHYSICAL_BENCH.md). Observed results and their limits remain in [VALIDATION.md](docs/VALIDATION.md).
 
-Measurement geometry is stored in original sensor pixels. Boxes include both endpoint pixels; line samples are evenly spaced and rounded to the nearest sensor pixel, with both endpoints included. Box/line means average valid temperatures after correction, rather than applying correction to an averaged word or radiance. Profiles show sample positions, without a physical-length calibration. Δ°F scales Δ°C by 1.8 with no absolute-temperature offset. JSON retains full geometry, validity counts, profile values/indices and the selected isotherm/ΔT configuration from the captured frame. These settings remain in memory through reconnect; process-restart restoration is not implemented yet.
+Measurement geometry is stored in original sensor pixels. Boxes include both endpoint pixels; line samples are evenly spaced and rounded to the nearest sensor pixel, with both endpoints included. Box/line means average valid temperatures after correction, rather than applying correction to an averaged word or radiance. Profiles show sample positions, without a physical-length calibration. Δ°F scales Δ°C by 1.8 with no absolute-temperature offset. JSON retains full geometry, validity counts, profile values/indices and the selected isotherm/ΔT configuration from the captured frame. The live layout, ordered delta selection, isotherm settings and next measurement ID are stored after accepted edits and restored on startup. Saved-frame edits remain local to reanalysis. Corrupt or unsupported stored layouts produce an explanatory message and leave the live engine with its default empty layout.
 
 ## Radiometric meaning
 

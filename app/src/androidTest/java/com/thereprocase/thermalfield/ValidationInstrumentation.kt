@@ -22,16 +22,28 @@ import java.util.concurrent.TimeUnit
 // native renderer without adding test SDKs to the application dependency set.
 class ValidationInstrumentation : Instrumentation() {
     private var measurementWorkload = false
-    override fun onCreate(arguments: Bundle?) { measurementWorkload = arguments?.getString("workload") == "true"; super.onCreate(arguments); start() }
+    private var layoutRestartPhase = ""
+    override fun onCreate(arguments: Bundle?) {
+        measurementWorkload = arguments?.getString("workload") == "true"
+        layoutRestartPhase = arguments?.getString("layout_restart") ?: ""
+        super.onCreate(arguments); start()
+    }
     override fun onStart() {
         val result = Bundle()
         try {
+            if (layoutRestartPhase.isNotEmpty()) {
+                validateLayoutProcessRestart(layoutRestartPhase)
+                result.putString("stream", "Measurement process-restart $layoutRestartPhase passed.\n")
+                finish(Activity.RESULT_OK, result)
+                return
+            }
             validateSavedProvenance()
             validateQueuedControlCancellation()
             validateCaptureDuringGalleryWork()
             validateSavedLiveProfiles()
+            validateMeasurementPersistence()
             val workload = if (measurementWorkload) validateMeasurementWorkload().toString() else null
-            result.putString("stream", "Native saved provenance/export, queued control cancellation, capture/gallery isolation and saved/live profile isolation passed.\n" +
+            result.putString("stream", "Native saved provenance/export, queued control cancellation, capture/gallery isolation, saved/live profile isolation and measurement persistence passed.\n" +
                 if (workload != null) "Synthetic workload: $workload\n" else "")
             finish(Activity.RESULT_OK, result)
         } catch (error: Throwable) {
@@ -40,9 +52,78 @@ class ValidationInstrumentation : Instrumentation() {
         }
     }
 
+    private fun validateLayoutProcessRestart(phase: String) {
+        check(targetContext.packageName.endsWith(".emulator") && phase in listOf("seed", "verify")) { "Restart phases require the isolated emulator package" }
+        val preferences = targetContext.getSharedPreferences("display", android.content.Context.MODE_PRIVATE)
+        val evidence = java.io.File(targetContext.cacheDir, "measurement-restart-validation.json")
+        if (phase == "seed") {
+            check(!evidence.exists()) { "An unfinished restart check already exists" }
+            val original = preferences.all["measurementLayout"]
+            check(original == null || original is String) { "Restore the invalid preference type before this restart check" }
+            evidence.writeText(JSONObject().put("original", original ?: JSONObject.NULL).put("pid", android.os.Process.myPid()).toString())
+            check(preferences.edit().remove("measurementLayout").commit())
+        }
+        val record = JSONObject(evidence.readText())
+        val consumer = HandlerThread("ThermalRestartValidationSurface").apply { start() }
+        val reader = ImageReader.newInstance(256, 192, PixelFormat.RGBA_8888, 3)
+        reader.setOnImageAvailableListener({ it.acquireLatestImage()?.close() }, Handler(consumer.looper))
+        val store = ViewModelStore()
+        val executors = mutableListOf<ExecutorService>()
+        var seeded = false
+        try {
+            lateinit var model: CameraViewModel
+            runOnMainSync {
+                model = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(targetContext.applicationContext as Application))[CameraViewModel::class.java]
+                model.surface(reader.surface); model.fixture(); model.foreground()
+            }
+            for (name in listOf("worker", "correctionWorker", "captureWorker", "galleryWorker")) executors += CameraViewModel::class.java.getDeclaredField(name).apply { isAccessible = true }.get(model) as ExecutorService
+            fun ready(count: Int) {
+                val deadline = SystemClock.elapsedRealtime()+8000
+                while (SystemClock.elapsedRealtime() < deadline) {
+                    if (model.canCapture() && model.state.value.frame.measurements.size == count) return
+                    SystemClock.sleep(20)
+                }
+                error("Restart layout did not become ready")
+            }
+            val bridge = CameraViewModel::class.java.getDeclaredField("bridge").apply { isAccessible = true }.get(model) as NativeBridge
+            val engine = CameraViewModel::class.java.getDeclaredField("engine").apply { isAccessible = true }.getLong(model)
+            if (phase == "seed") {
+                ready(0)
+                runOnMainSync {
+                    model.measurementTool(1); model.placeMeasurement(.2, .3, .2, .3); model.placeMeasurement(.7, .6, .7, .6)
+                    model.measurementTool(2); model.placeMeasurement(.3, .35, .4, .45)
+                    model.measurementTool(3); model.placeMeasurement(.1, .2, .8, .7)
+                }
+                ready(4)
+                val ids = model.state.value.frame.measurements.map { it.id }
+                runOnMainSync { model.measurementOptions(ids[0], ids[1], 1, 14f, 32f) }
+                ready(4)
+                val expected = bridge.measurementState(engine)
+                check(preferences.getString("measurementLayout", null) == expected)
+                evidence.writeText(record.put("expected", expected).toString())
+                seeded = true
+            } else {
+                check(record.getInt("pid") != android.os.Process.myPid()) { "Restart verifier is still in the seed process" }
+                ready(4)
+                check(bridge.measurementState(engine) == record.getString("expected")) { "Process restart did not restore the complete layout" }
+            }
+        } finally {
+            runOnMainSync { store.clear() }
+            executors.forEach { it.awaitTermination(5, TimeUnit.SECONDS) }
+            reader.setOnImageAvailableListener(null, null)
+            consumer.quitSafely(); consumer.join(2000); reader.close()
+            if (phase == "verify" || !seeded) {
+                check(preferences.edit().apply {
+                    if (record.isNull("original")) remove("measurementLayout") else putString("measurementLayout", record.getString("original"))
+                }.commit())
+                check(evidence.delete())
+            }
+        }
+    }
+
     private fun validateSavedLiveProfiles() {
         val preferences = targetContext.getSharedPreferences("display", android.content.Context.MODE_PRIVATE)
-        val keys = listOf("palette", "flip", "rotation", "mirror", "automatic", "lower", "upper", "emissivity", "reflectedCelsius", "corrected", "networkUrl")
+        val keys = listOf("palette", "flip", "rotation", "mirror", "automatic", "lower", "upper", "emissivity", "reflectedCelsius", "corrected", "networkUrl", "measurementLayout")
         val originalPreferences = preferences.all.filterKeys { it in keys }
         val consumer = HandlerThread("ThermalProfileValidationSurface").apply { start() }
         val reader = ImageReader.newInstance(256, 192, PixelFormat.RGBA_8888, 3)
@@ -117,6 +198,8 @@ class ValidationInstrumentation : Instrumentation() {
                 }
             }
             awaitReady()
+            runOnMainSync { active.deleteMeasurement(0); active.measurementOptions(0, 0, 0) }
+            awaitReady { it.frame.measurements.isEmpty() }
             configure(2, 2, false, true, .96, 20.0, true, 20f, 30f)
             val first = capture()
             configure(0, 0, false, false, .8, 40.0, false, 20f, 30f)
@@ -143,6 +226,12 @@ class ValidationInstrumentation : Instrumentation() {
             runOnMainSync { active.openSaved(first) }
             awaitReady { it.archive && it.palette == 2 && kotlin.math.abs(it.emissivity-.96) < 1e-6 && it.frame.measurements.isEmpty() }
             configure(0, 3, true, false, .7, 55.0, false, 5f, 45f)
+            runOnMainSync {
+                active.measurementTool(2)
+                active.placeMeasurement(.15, .2, .35, .4)
+                active.measurementOptions(0, 0, 3, 10f, 50f)
+            }
+            awaitReady { it.frame.measurements.size == 1 }
             check(preferences.all.filterKeys { it in keys } == livePreferences) { "Archive edits changed live preferences" }
             runOnMainSync { active.background(); active.foreground() }
             awaitReady { it.archive && kotlin.math.abs(it.emissivity-.7) < 1e-6 && it.palette == 0 }
@@ -201,6 +290,127 @@ class ValidationInstrumentation : Instrumentation() {
                         is String -> putString(key, value)
                         else -> remove(key)
                     }
+                }
+            }.commit()
+            reader.setOnImageAvailableListener(null, null)
+            consumer.quitSafely(); consumer.join(2000); reader.close()
+        }
+    }
+
+    private fun validateMeasurementPersistence() {
+        val preferences = targetContext.getSharedPreferences("display", android.content.Context.MODE_PRIVATE)
+        val original = preferences.all["measurementLayout"]
+        val consumer = HandlerThread("ThermalLayoutValidationSurface").apply { start() }
+        val reader = ImageReader.newInstance(256, 192, PixelFormat.RGBA_8888, 3)
+        reader.setOnImageAvailableListener({ it.acquireLatestImage()?.close() }, Handler(consumer.looper))
+        val stores = mutableListOf<ViewModelStore>()
+        val executors = mutableMapOf<ViewModelStore, List<ExecutorService>>()
+        try {
+            check(preferences.edit().remove("measurementLayout").commit())
+            fun create(): Pair<ViewModelStore, CameraViewModel> {
+                val store = ViewModelStore().also { stores += it }
+                lateinit var model: CameraViewModel
+                runOnMainSync {
+                    model = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(targetContext.applicationContext as Application))[CameraViewModel::class.java]
+                    model.surface(reader.surface); model.fixture(); model.foreground()
+                }
+                executors[store] = listOf("worker", "correctionWorker", "captureWorker", "galleryWorker").map {
+                    CameraViewModel::class.java.getDeclaredField(it).apply { isAccessible = true }.get(model) as ExecutorService
+                }
+                return store to model
+            }
+            fun close(store: ViewModelStore) {
+                runOnMainSync { store.clear() }
+                executors.remove(store)?.forEach { check(it.awaitTermination(5, TimeUnit.SECONDS)) }
+                stores.remove(store)
+            }
+            fun ready(model: CameraViewModel, count: Int) {
+                val deadline = SystemClock.elapsedRealtime()+8000
+                while (SystemClock.elapsedRealtime() < deadline) {
+                    if (model.canCapture() && model.state.value.frame.measurements.size == count) return
+                    SystemClock.sleep(20)
+                }
+                error("Stored layout was not ready: count=${model.state.value.frame.measurements.size}, ${model.captureRefusalReason()}")
+            }
+            fun layout(model: CameraViewModel): String {
+                val bridge = CameraViewModel::class.java.getDeclaredField("bridge").apply { isAccessible = true }.get(model) as NativeBridge
+                val engine = CameraViewModel::class.java.getDeclaredField("engine").apply { isAccessible = true }.getLong(model)
+                return bridge.measurementState(engine)
+            }
+            val (firstStore, first) = create()
+            ready(first, 0)
+            runOnMainSync {
+                first.measurementTool(1)
+                first.placeMeasurement(.2, .3, .2, .3)
+                first.placeMeasurement(.7, .6, .7, .6)
+                first.measurementTool(2); first.placeMeasurement(.3, .35, .4, .45)
+                first.measurementTool(3); first.placeMeasurement(.1, .2, .8, .7)
+                first.measurementTool(1)
+                repeat(12) { index -> val x = .05+index*.05; first.placeMeasurement(x, .8, x, .8) }
+            }
+            ready(first, 16)
+            val ids = first.state.value.frame.measurements.map { it.id }
+            runOnMainSync { first.measurementOptions(ids[0], ids[1], 2, 14f, 32f) }
+            ready(first, 16)
+            val full = layout(first)
+            check(preferences.getString("measurementLayout", null) == full)
+            runOnMainSync { first.deleteMeasurement(ids.last()) }
+            ready(first, 15)
+            val persisted = layout(first)
+            check(MeasurementLayout.decode(persisted).nextId == ids.last()+1)
+            close(firstStore)
+            val (secondStore, second) = create()
+            ready(second, 15)
+            check(layout(second) == persisted) { "Fresh engine did not restore sensor geometry/options/ID sequence" }
+            check(second.state.value.deltaFirst == ids[0] && second.state.value.deltaSecond == ids[1] && second.state.value.isothermMode == 2)
+            runOnMainSync { second.measurementTool(1); second.placeMeasurement(.9, .9, .9, .9) }
+            ready(second, 16)
+            check(second.state.value.frame.measurements.last().id == ids.last()+1) { "Restart reused the removed measurement's ID" }
+            runOnMainSync { second.deleteMeasurement(0) }
+            ready(second, 0)
+            val cleared = layout(second)
+            close(secondStore)
+            val (thirdStore, third) = create()
+            ready(third, 0)
+            check(layout(third) == cleared) { "Cleared layout was not persisted" }
+            close(thirdStore)
+
+            val invalid = listOf<(JSONObject) -> Unit>(
+                { it.put("version", 2) },
+                { it.getJSONArray("geometry").put(it.getJSONArray("geometry").getJSONArray(0)) },
+                { it.getJSONArray("geometry").getJSONArray(0).put(0, 1.5) },
+                { it.getJSONArray("geometry").getJSONArray(0).put(0, "1") },
+                { it.getJSONArray("geometry").getJSONArray(1).put(0, ids[0]) },
+                { it.getJSONArray("geometry").getJSONArray(0).put(2, 256) },
+                { it.getJSONArray("geometry").getJSONArray(0).put(3, 192) },
+                { it.put("next_id", ids[0]) },
+                { it.put("isotherm", 4) },
+                { it.put("lower", 35).put("upper", 10) },
+                { it.put("first", -1) },
+            )
+            invalid.forEachIndexed { index, change ->
+                var rejected = false
+                try { MeasurementLayout.decode(JSONObject(full).also(change).toString()) }
+                catch (_: Exception) { rejected = true }
+                check(rejected) { "Malformed layout case $index was accepted" }
+            }
+            check(preferences.edit().putString("measurementLayout", JSONObject(full).put("version", 2).toString()).commit())
+            val (_, invalidModel) = create()
+            ready(invalidModel, 0)
+            check(invalidModel.state.value.captureMessage.startsWith("Stored measurements could not be restored:"))
+        } finally {
+            stores.toList().forEach { store ->
+                runOnMainSync { store.clear() }
+                executors[store]?.forEach { it.awaitTermination(5, TimeUnit.SECONDS) }
+            }
+            preferences.edit().apply {
+                when (original) {
+                    is String -> putString("measurementLayout", original)
+                    is Int -> putInt("measurementLayout", original)
+                    is Float -> putFloat("measurementLayout", original)
+                    is Boolean -> putBoolean("measurementLayout", original)
+                    is Long -> putLong("measurementLayout", original)
+                    else -> remove("measurementLayout")
                 }
             }.commit()
             reader.setOnImageAvailableListener(null, null)

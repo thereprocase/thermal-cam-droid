@@ -23,8 +23,12 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(archive)(JNIEnv* env,jobject,jlong 
         engine(id)->archive(bytes,timestamp,origin,gain,version,before,after);
     }catch(const std::exception& e){fail(env,e);}
 }
-extern "C" JNIEXPORT void JNICALL JNI_METHOD(restoreMeasurements)(JNIEnv* env,jobject,jlong id,jintArray data,jint first,jint second,jint isotherm,jfloat lower,jfloat upper) {
-    try{std::vector<int> geometry(env->GetArrayLength(data));env->GetIntArrayRegion(data,0,geometry.size(),geometry.data());engine(id)->restore_measurements(geometry,first,second,isotherm,lower,upper);}catch(const std::exception& e){fail(env,e);}
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(restoreMeasurements)(JNIEnv* env,jobject,jlong id,jintArray data,jint first,jint second,jint isotherm,jfloat lower,jfloat upper,jint next) {
+    try{std::vector<int> geometry(env->GetArrayLength(data));env->GetIntArrayRegion(data,0,geometry.size(),geometry.data());engine(id)->restore_measurements(geometry,first,second,isotherm,lower,upper,next);}catch(const std::exception& e){fail(env,e);}
+}
+extern "C" JNIEXPORT jstring JNICALL JNI_METHOD(measurementState)(JNIEnv* env,jobject,jlong id) {
+    try { return env->NewStringUTF(engine(id)->measurement_state().c_str()); }
+    catch (const std::exception& e) { fail(env,e); return nullptr; }
 }
 extern "C" JNIEXPORT jlong JNICALL JNI_METHOD(measurementVersion)(JNIEnv* env,jobject,jlong id) {
     try{return engine(id)->measurement_version();}catch(const std::exception& e){fail(env,e);return 0;}
