@@ -8,9 +8,7 @@ An independent, open-source Android thermal viewer for the USB device `0bda:5830
 
 ## Current features
 
-The list describes the latest source. The v0.1.2 development APK includes saved-capture browsing/reanalysis and the foreground session-recovery follow-up.
-
-Source updates after 0.1.2 add queued-command cancellation/target retention, clear inherited network/gain labels when entering Demo, and provide explicit ± controls for temperature inputs. Debug builds of the upcoming version identify as 0.1.3-dev; 0.1.2 release artifacts remain unchanged.
+The latest published APK is **0.1.2**. Current source prepares **0.1.3-rc1** with the features below, including the larger viewer and sensor-driven full-screen rotation. Software checks have passed on the Pixel and an Android 16 AVD; physical mounting/orientation, baseline/gain/NUC and bath qualification remain pending. This is not a measurement-accuracy certification.
 
 - Native USB capture through Android UsbManager, a borrowed file descriptor, libusb and libuvc. No proprietary camera SDK.
 - GPU rendering of the bottom 256 × 192 radiometric plane; the camera's AGC preview is ignored for display.
@@ -18,8 +16,8 @@ Source updates after 0.1.2 add queued-command cancellation/target retention, cle
 - Rotate in 90° steps, mirror, 180° flip and a separate screen-rotation lock.
 - Up to 16 sensor-coordinate spots, inclusive boxes with min/max/mean, and lines with nearest-pixel profiles. Edit or delete geometry; compare two spots as ordered ΔT A − B. Invalid correction samples are excluded from statistics.
 - Inclusive isotherm bands and below/above threshold modes, using the current apparent/corrected model. Cyan highlighting and matched-pixel counts are recorded with the capture.
-- A pinned viewport with separate scrolling controls; landscape uses side-by-side view and controls. Layout qualification is ongoing.
-- Immersive full-screen view with capture/exit overlays, temperature scale, source/model context and working volume-key capture. Back exits full-screen mode.
+- An image-first workspace with grouped controls panels, an overlaid color scale and temperature summary, and rotation buttons in usable letterbox space. Layout qualification is ongoing.
+- Immersive full-screen view with four-way sensor-driven GUI rotation, capture/exit overlays, source/model context and volume-key capture. Back exits full-screen mode. USB rendering and exports compensate a phone-mounted camera’s orientation.
 - Capture an annotated PNG, original 16-bit grayscale radiometric PNG and JSON sidecar through MediaStore, under `Downloads/ThermalField`.
 - Volume Down captures the annotated view; Volume Up or X selects raw as the preferred share item. Every capture still saves all three files. Share one image, the raw plane or the complete set through Android's chooser.
 - Browse complete captures accessible to this installation and reopen their original 16-bit planes for reanalysis. Saved-frame edits use a separate profile; returning to a live source restores the survey's applied correction, display settings and sensor-coordinate measurements. Derived exports preserve acquisition time and record a separate export time. Saved synthetic frames remain explicitly labeled.
@@ -93,6 +91,10 @@ The remaining powered-device persistence, official-app water-bath and direct-USB
 Measurement geometry is stored in original sensor pixels. Boxes include both endpoint pixels; line samples are evenly spaced and rounded to the nearest sensor pixel, with both endpoints included. Box/line means average valid temperatures after correction, rather than applying correction to an averaged word or radiance. Profiles show sample positions, without a physical-length calibration. Δ°F scales Δ°C by 1.8 with no absolute-temperature offset. JSON retains full geometry, validity counts, profile values/indices and the selected isotherm/ΔT configuration from the captured frame. The live layout, ordered delta selection, isotherm settings and next measurement ID are stored after accepted edits and restored on startup. Saved-frame edits remain local to reanalysis. Corrupt or unsupported stored layouts produce an explanatory message and leave the live engine with its default empty layout.
 
 ## Radiometric meaning
+
+The normal workspace gives the remaining screen area to the image. Controls are grouped into View, Measure, Correction, Camera and Info panels. The color scale and temperature summary overlay the image; rotation controls use existing letterbox space when 48 dp touch targets fit.
+
+Full screen requests Android's four-way sensor orientation, including upside-down portrait. Screen rotation lock freezes the GUI orientation. For a USB camera rigidly mounted to the phone, the rendered image subtracts the current display quarter-turn from the manual camera offset, with flip and mirror retained. An extension-mounted camera may move independently: use rotation lock and the manual controls to set its mounting offset. Network and saved sources keep their independent/original image orientation. Rendered captures bake in the applied rotation and report it in JSON; raw exports stay in sensor coordinates. Android's orientation policy handles sensor filtering rather than a second app-level accelerometer threshold implementation. See [Android display rotation](https://developer.android.com/reference/android/view/Display#getRotation()) and [fullSensor orientation](https://developer.android.com/guide/topics/manifest/activity-element#screen).
 
 The received stream is 256 × 384 YUYV. The lower half contains unsigned little-endian words with the documented conversion `T_C = word / 64 - 273.15`. Raw exports preserve those words in sensor orientation, independently of display rotation, mirroring, palette and span. PNG stores 16-bit samples in PNG's big-endian order; pixel values remain unchanged.
 

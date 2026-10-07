@@ -41,14 +41,14 @@ data class FrameTelemetry(
     val presentationSamples: Long = 0, val error: String = "",
     val emissivity: Double = Double.NaN, val reflectedCelsius: Double = Double.NaN, val corrected: Boolean = false,
     val measurements: List<Measurement> = emptyList(), val delta: Double = Double.NaN,
-    val isothermPixels: Int = 0, val measurementVersion: Long = 0,
+    val isothermPixels: Int = 0, val measurementVersion: Long = 0, val sourceGeneration: Long = -1,
 )
 
 data class CameraUiState(
     val status: String = "Attach camera", val connected: Boolean = false,
     val fixture: Boolean = false, val busy: Boolean = false, val palette: Int = 0,
     val flip: Boolean = false, val fahrenheit: Boolean = false, val rotationLocked: Boolean = false,
-    val rotation: Int = 0, val mirror: Boolean = false,
+    val rotation: Int = 0, val mirror: Boolean = false, val displayRotation: Int = 0,
     val automatic: Boolean = true, val lower: Float = 20f, val upper: Float = 30f,
     val highGain: Boolean = true, val frame: FrameTelemetry = FrameTelemetry(),
     val serial: String = "", val firmware: String = "", val captureMessage: String = "",
@@ -61,13 +61,20 @@ data class CameraUiState(
     val deltaFirst: Int = 0, val deltaSecond: Int = 0,
     val isothermMode: Int = 0, val isothermLower: Float = 20f, val isothermUpper: Float = 30f,
     val measurementApplying: Boolean = false, val expectedMeasurementVersion: Long = 0,
-    val fullScreen: Boolean = false,
+    val fullScreen: Boolean = false, val expectedSourceGeneration: Long = -1,
     val archive: Boolean = false, val archiveSynthetic: Boolean = false,
     val profileApplying: Boolean = false,
     val profileRevision: Long = 0,
     val cameraPermissionMissing: Boolean = false,
     val gallery: List<CaptureRecord> = emptyList(), val galleryLoading: Boolean = false, val galleryError: String = "",
 )
+
+// USB sensor axes rotate with a camera mounted to the phone. Network and saved
+// sources have independent mounting/original axes and only use manual rotation.
+internal val CameraUiState.cameraRotation: Int
+    get() = (rotation - (if (!archive && !network && !fixture) displayRotation else 0) + 4) % 4
+internal val CameraUiState.renderRotation: Int
+    get() = (cameraRotation + (if (flip) 2 else 0)) % 4
 
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application
@@ -107,7 +114,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         palette = preferences.getInt("palette", 0), flip = preferences.getBoolean("flip", false),
         fahrenheit = preferences.getBoolean("fahrenheit", false),
         rotationLocked = preferences.getBoolean("rotationLocked", false),
-        rotation = preferences.getInt("rotation", 0), mirror = preferences.getBoolean("mirror", false),
+        // The native backup contains the compensated angle; retain the
+                // persisted manual offset and apply today's display rotation.
+                rotation = preferences.getInt("rotation", 0), mirror = preferences.getBoolean("mirror", false),
         networkUrl = preferences.getString("networkUrl", "") ?: "",
         automatic = preferences.getBoolean("automatic", true), lower = preferences.getFloat("lower", 20f), upper = preferences.getFloat("upper", 30f),
         emissivity = preferences.getFloat("emissivity", 1f).toDouble(), reflectedCelsius = preferences.getFloat("reflectedCelsius", 20f).toDouble(),
@@ -166,7 +175,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         emissivity = json.optDouble("emissivity", Double.NaN), reflectedCelsius = json.optDouble("reflected_apparent_celsius", Double.NaN), corrected = json.optBoolean("correction_applied"),
                         measurements = measurements(json), delta = json.optJSONObject("delta_t")?.optDouble("celsius", Double.NaN) ?: Double.NaN,
                         isothermPixels = json.optJSONObject("isotherm")?.optInt("matched_pixels") ?: 0,
-                        measurementVersion = json.optLong("measurement_version"),
+                        measurementVersion = json.optLong("measurement_version"), sourceGeneration = json.getLong("session_generation"),
                     )
                     mutableState.update { it.copy(frame = frame) }
                 } catch (error: Exception) { Log.e("ThermalField", "Telemetry read failed", error) }
@@ -200,7 +209,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val profile = JSONObject(bridge.restoreLiveProfile(engine))
             updateSession(token) { it.copy(
                 palette = profile.getInt("palette"), flip = profile.getBoolean("flip"),
-                rotation = profile.getInt("rotation"), mirror = profile.getBoolean("mirror"),
+                // The native backup contains the compensated angle; retain the
+                // persisted manual offset and apply today's display rotation.
+                rotation = preferences.getInt("rotation", 0), mirror = profile.getBoolean("mirror"),
                 automatic = profile.getBoolean("automatic"), lower = profile.getDouble("lower").toFloat(), upper = profile.getDouble("upper").toFloat(),
                 emissivity = profile.getDouble("emissivity"), reflectedCelsius = profile.getDouble("reflected"), corrected = profile.getBoolean("corrected"),
                 deltaFirst = profile.getInt("delta_first"), deltaSecond = profile.getInt("delta_second"),
@@ -209,7 +220,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 profileApplying = archiveSelected != null, correctionApplying = false, measurementApplying = false,
                 captureMessage = "Returned to live survey settings", correctionError = "",
             ) }
-            if (!closed && started && generation.get() == token) liveProfileRestorePending = false
+            if (!closed && started && generation.get() == token) { liveProfileRestorePending = false; configure() }
         }.get(10, java.util.concurrent.TimeUnit.SECONDS)
     }
 
@@ -275,11 +286,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 closeConnection()
                 restoreLiveProfile(token)
+                configure()
                 val opened = manager.openDevice(device) ?: error("Android could not open the USB device")
                 connection = opened
                 val identity = JSONObject(bridge.open(engine, opened.fileDescriptor))
                 if (generation.get() != token || !started) { closeConnection(); return@execute }
-                updateSession(token) { it.copy(status = "Live", connected = true, fixture = false, busy = false,
+                val sourceGeneration = nativeSourceGeneration()
+                updateSession(token) { it.copy(expectedSourceGeneration = sourceGeneration, status = "Live", connected = true, fixture = false, busy = false,
                     serial = identity.optString("serial"), firmware = identity.optString("firmware"), highGain = true, gainKnown = true, network = false) }
             } catch (error: Exception) {
                 closeConnection()
@@ -324,8 +337,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 closeConnection()
                 if (generation.get() != token) return@execute
                 restoreLiveProfile(token)
+                configure()
                 bridge.replay(engine, context.assets.open("fixture.yuyv").use { it.readBytes() })
-                updateSession(token) { it.copy(status = "Fixture replay", busy = false) }
+                val sourceGeneration = nativeSourceGeneration()
+                updateSession(token) { it.copy(expectedSourceGeneration = sourceGeneration, status = "Fixture replay", busy = false) }
             } catch (error: Exception) { updateSession(token) { it.copy(status = error.message ?: "Fixture failed", busy = false) } }
         }
     }
@@ -359,7 +374,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 updateSession(token) { it.copy(status = "Live settings could not be restored", captureMessage = error.cause?.message ?: error.message.orEmpty(), busy = false) }
                 return@execute
             }
+            configure()
             bridge.beginNetwork(engine)
+            val sourceGeneration = nativeSourceGeneration()
             val active = AtomicBoolean(true)
             val client = NetworkFrames(address, active); networkFrames = client
             networkThread = Thread({
@@ -370,7 +387,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             updateSession(token) {
                                 val pending = pendingCommandSession.get() == token
                                 if (!it.connected || !pending && it.status != "Network live")
-                                    it.copy(status = if (pending) it.status else "Network live", connected = true, network = true, busy = pending)
+                                    it.copy(expectedSourceGeneration = sourceGeneration, status = if (pending) it.status else "Network live", connected = true, network = true, busy = pending)
                                 else it
                             }
                         }
@@ -524,13 +541,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 bridge.archive(engine, loaded.composite, m.getLong("timestamp_unix_ns"), original, gain,
                     deviceContext?.optString("firmware", "") ?: "", properties("original_properties"), properties("configured_properties"))
                 archiveLoaded = capture to loaded
-                updateSession(token) { it.copy(status = "Saved capture · original frame", archive = true, archiveSynthetic = original == "fixture", busy = false, profileApplying = false, lastCapture = capture, highGain = gain == 1, gainKnown = gain >= 0) }
+                val sourceGeneration = nativeSourceGeneration()
+                updateSession(token) { it.copy(expectedSourceGeneration = sourceGeneration, status = "Saved capture · original frame", archive = true, archiveSynthetic = original == "fixture", busy = false, profileApplying = false, lastCapture = capture, highGain = gain == 1, gainKnown = gain >= 0) }
             } catch (error: Exception) {
                 updateSession(token) { it.copy(status = "Saved capture could not be opened", captureMessage = error.cause?.message ?: error.message ?: "Try another capture", busy = false, archive = false, profileApplying = false) }
             }
         }
     }
     fun measurementTool(kind: Int, id: Int = 0) { if (!state.value.profileApplying) mutableState.update { it.copy(measurementTool = kind, selectedMeasurement = id) } }
+    fun displayRotation(quarterTurns: Int) {
+        require(quarterTurns in 0..3)
+        if (state.value.displayRotation == quarterTurns) return
+        mutableState.update { it.copy(displayRotation = quarterTurns) }
+        if (!state.value.profileApplying) configure()
+    }
     fun fullScreen(value: Boolean) { mutableState.update { it.copy(fullScreen = value) } }
     private fun measurementChange(operation: () -> Unit) {
         if (state.value.profileApplying) return
@@ -601,7 +625,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
     fun message(value: String) { mutableState.update { it.copy(captureMessage = value) } }
-    private fun configure() { state.value.let { bridge.configure(engine, it.palette, it.flip, it.rotation, it.mirror, it.automatic, it.lower, it.upper) } }
+    private fun nativeSourceGeneration(): Long = JSONObject(bridge.summary(engine)).getLong("current_generation")
+
+    private fun configure() {
+        state.value.let { bridge.configure(engine, it.palette, it.flip, it.cameraRotation, it.mirror, it.automatic, it.lower, it.upper) }
+        val version = bridge.measurementVersion(engine)
+        mutableState.update { it.copy(expectedMeasurementVersion = version) }
+    }
 
     fun dumpFrame() {
         if (!BuildConfig.DEBUG) return
@@ -628,8 +658,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             !it.connected && !it.fixture && !it.archive -> "Source disconnected"
             it.frame.error.isNotEmpty() -> "Display error"
             it.profileApplying -> "Survey profile is applying"
+            it.expectedSourceGeneration < 0 || it.frame.sourceGeneration != it.expectedSourceGeneration -> "Waiting for this source's first displayed frame"
             it.busy -> "Camera command in progress"
-            it.measurementApplying || it.frame.measurementVersion < it.expectedMeasurementVersion -> "Measurements are applying"
+            it.measurementApplying || it.frame.measurementVersion < it.expectedMeasurementVersion -> "Display or measurements are applying"
             it.correctionApplying || it.frame.corrected != it.corrected || kotlin.math.abs(it.frame.emissivity - it.emissivity) > 1e-7 || kotlin.math.abs(it.frame.reflectedCelsius - it.reflectedCelsius) > 1e-5 -> "Correction inputs are applying"
             it.saving -> "Capture is already saving"
             it.editing -> "Finish editing first"

@@ -362,6 +362,10 @@ void Engine::set_surface(ANativeWindow* window) {
 void Engine::configure(int palette,bool flip,int rotation,bool mirror,bool automatic,float lower,float upper) {
     if (palette<0 || palette>2 || rotation<0 || rotation>3 || !std::isfinite(lower) || !std::isfinite(upper) || upper<=lower) throw std::invalid_argument("Invalid display settings");
     std::lock_guard<std::mutex> lock(mutex_);
+    // The capture guard also covers display changes: an older queued frame
+    // must not be accepted while a new orientation or scale is requested.
+    if(settings_.palette!=palette || settings_.flip!=flip || settings_.rotation!=rotation || settings_.mirror!=mirror ||
+       settings_.automatic!=automatic || settings_.lower!=lower || settings_.upper!=upper) ++settings_.measurement_version;
     settings_.palette=palette;settings_.flip=flip;settings_.rotation=rotation;settings_.mirror=mirror;
     settings_.automatic=automatic;settings_.lower=lower;settings_.upper=upper;
 }
@@ -712,6 +716,7 @@ std::string Engine::summary(bool include_measurements) {
     std::lock_guard<std::mutex> lock(mutex_);const auto now=monotonic_ns();
     double elapsed=(last_callback_ns_-first_callback_ns_)/1e9;
     std::ostringstream out;out<<std::setprecision(12)<<"{\"frame\":"<<last_presented_.sequence
+        <<",\"session_generation\":"<<last_presented_.generation<<",\"current_generation\":"<<capture_generation_
         <<",\"source\":"<<quote(archive_ ? "archive":fixture_ ? "fixture" : network_ ? "network":"camera")<<",\"minimum\":"<<number(last_presented_.minimum)
         <<",\"maximum\":"<<number(last_presented_.maximum)<<",\"center\":"<<number(last_presented_.center)
         <<",\"received\":"<<received_<<",\"rendered\":"<<rendered_<<",\"malformed\":"<<malformed_<<",\"overflow\":"<<overflow_

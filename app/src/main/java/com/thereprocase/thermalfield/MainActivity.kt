@@ -5,8 +5,10 @@ import android.content.Intent
 import android.content.ClipData
 import android.content.pm.ActivityInfo
 import android.os.Bundle
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.content.res.Configuration
+import android.hardware.display.DisplayManager
+import android.os.Handler
+import android.os.Looper
 import android.view.WindowManager
 import android.view.KeyEvent
 import android.net.Uri
@@ -41,7 +43,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -62,6 +63,18 @@ internal val Mono = FontFamily(Font(R.font.plex_mono_regular))
 class MainActivity : ComponentActivity() {
     private val heldCaptureKeys = mutableSetOf<Int>()
     private lateinit var model: CameraViewModel
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(id: Int) = Unit
+        override fun onDisplayRemoved(id: Int) = Unit
+        override fun onDisplayChanged(id: Int) { updateDisplayRotation() }
+    }
+    private fun updateDisplayRotation() {
+        if (::model.isInitialized) model.displayRotation(display?.rotation ?: 0)
+    }
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        updateDisplayRotation()
+    }
     private var requestedFixture = false
     private var requestedNetwork: String? = null
     private var pendingNetwork: String? = null
@@ -83,8 +96,13 @@ class MainActivity : ComponentActivity() {
         requestedNetwork = if (BuildConfig.DEBUG) intent.getStringExtra("network_url") else null
         setContent {
             val state by model.state.collectAsStateWithLifecycle()
-            LaunchedEffect(state.rotationLocked) {
-                requestedOrientation = if (state.rotationLocked) ActivityInfo.SCREEN_ORIENTATION_LOCKED else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            LaunchedEffect(state.rotationLocked, state.fullScreen) {
+                requestedOrientation = when {
+                    state.rotationLocked -> ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                    state.fullScreen -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                    else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }
+                updateDisplayRotation()
             }
             LaunchedEffect(state.fullScreen) {
                 window.insetsController?.let { controller ->
@@ -131,10 +149,12 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStart() {
         super.onStart()
+        getSystemService(DisplayManager::class.java).registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
+        updateDisplayRotation()
         model.cameraPermission(checkSelfPermission(Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED)
         model.foreground()
     }
-    override fun onStop() { model.background(); super.onStop() }
+    override fun onStop() { getSystemService(DisplayManager::class.java).unregisterDisplayListener(displayListener); model.background(); super.onStop() }
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode in heldCaptureKeys) return true
         if (model.canCapture() && keyCode in listOf(KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_X)) {
@@ -200,6 +220,8 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
 }
 
 @Composable private fun ThermalScreen(state: CameraUiState, model: CameraViewModel, permission: () -> Unit, settings: () -> Unit, connectNetwork: (String) -> Unit, share: (SavedCapture, String) -> Unit, surfaceCreated: () -> Unit) {
+    var controlsDialog by remember { mutableStateOf(false) }
+    var controlCategory by remember { mutableStateOf("View") }
     var sharing by remember { mutableStateOf(false) }
     var galleryDialog by remember { mutableStateOf(false) }
     var sourceDialog by remember { mutableStateOf(false) }
@@ -237,7 +259,7 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
     val compact = LocalConfiguration.current.screenWidthDp > LocalConfiguration.current.screenHeightDp
     Column(Modifier.fillMaxSize().background(Gray).safeDrawingPadding()) {
         Row(Modifier.fillMaxWidth().background(Blue).padding(horizontal = 12.dp, vertical = if (compact) 4.dp else 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Label("THERMAL FIELD", color = Color.White, mono = true, size = 18)
+            Label("THERMAL FIELD", color = Color.White, mono = true, size = 14)
             Action("Full screen") { model.fullScreen(true) }
             Action(if (state.archive) "Saved" else if (state.fixture) "Demo" else if (state.network) "Network" else "USB", modifier = Modifier) { sourceDialog = true; model.editing(true) }
         }
@@ -247,52 +269,25 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                 Action("App settings", action = settings)
             }
         }
-        val live: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { viewportHeight ->
-            Pane(if (state.archive) "SAVED CAPTURE / ORIGINAL FRAME" else if (state.fixture) "DEMO / SYNTHETIC TEMPERATURES" else "RADIOMETRIC VIEW / 256 × 192") {
-                BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val ratio = if ((state.rotation + if (state.flip) 2 else 0) % 2 == 0) 4f / 3f else 3f / 4f
-                val height = minOf(maxWidth / ratio, viewportHeight)
-                ThermalViewport(state, model, ratio, Modifier.fillMaxWidth().height(height), surfaceCreated)
-                }
-                val visible = state.frame.frame > 0 && (state.connected || state.fixture || state.archive) && state.frame.error.isEmpty()
-                Row(Modifier.fillMaxWidth().background(Light).padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                    if (compact) {
-                        Label("MIN ${if (visible) temperature(state.frame.minimum, state.fahrenheit) else "—"}", mono = true, size = 12)
-                        Label("C ${if (visible) temperature(state.frame.center, state.fahrenheit) else "—"}", mono = true, size = 12)
-                        Label("MAX ${if (visible) temperature(state.frame.maximum, state.fahrenheit) else "—"}", mono = true, size = 12)
-                    } else {
-                        Column { Label("MIN", color = Color(0xff008ea1), mono = true); Label(if (visible) temperature(state.frame.minimum, state.fahrenheit) else "—", mono = true) }
-                        Column { Label("CENTER", mono = true); Label(if (visible) temperature(state.frame.center, state.fahrenheit) else "—", mono = true) }
-                        Column { Label("MAX", color = Color(0xffb3261e), mono = true); Label(if (visible) temperature(state.frame.maximum, state.fahrenheit) else "—", mono = true) }
-                    }
-                }
-                val lower = if (state.automatic) state.frame.minimum else state.lower.toDouble()
-                val upper = if (state.automatic) state.frame.maximum else state.upper.toDouble()
-                PaletteScale(state.palette)
-                Row(Modifier.fillMaxWidth().background(Light).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Label(if (visible || !state.automatic) temperature(lower, state.fahrenheit) else "—", mono = true)
-                    Label(if (state.automatic) "AUTO SCALE" else "LOCKED SCALE", mono = true)
-                    Label(if (visible || !state.automatic) temperature(upper, state.fahrenheit) else "—", mono = true)
-                }
-                Label(if (state.fixture || state.archive && state.archiveSynthetic) "Synthetic data · not a camera measurement" else if (state.archive) "Saved frame · original acquisition time · validation pending" else if (state.corrected) "Corrected ε ${String.format(Locale.US, "%.3f", state.emissivity)} · reflected ${temperature(state.reflectedCelsius, state.fahrenheit)} · baseline/accuracy validation pending" else "Apparent temperatures · emissivity not applied · comparison validation pending",
-                    Modifier.fillMaxWidth().background(Color(0xfffff4dc)).padding(8.dp), size = 12)
-            }
+        val live: @Composable () -> Unit = {
+            val ratio = if (state.renderRotation % 2 == 0) 4f / 3f else 3f / 4f
+            ThermalViewport(state, model, ratio, Modifier.fillMaxSize(), surfaceCreated, compactScale = true)
         }
         val controls: @Composable () -> Unit = {
-            Pane("ORIENTATION") {
+            if (controlCategory == "View") Pane("ORIENTATION") {
                 Row(Modifier.fillMaxWidth().background(Light).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Action("Rotate +90°", modifier = Modifier.weight(1f)) { model.rotate() }
                     Action("Mirror", state.mirror, modifier = Modifier.weight(1f)) { model.mirror() }
                     Action("Flip 180°", state.flip, modifier = Modifier.weight(1f)) { model.flip() }
                 }
-                Label("${((state.rotation + if (state.flip) 2 else 0) % 4) * 90}°${if (state.mirror) " · mirrored" else ""}", Modifier.padding(horizontal = 12.dp, vertical = 4.dp), mono = true)
+                Label("${state.renderRotation * 90}°${if (state.mirror) " · mirrored" else ""}", Modifier.padding(horizontal = 12.dp, vertical = 4.dp), mono = true)
             }
-            MeasurementsPane(state, model) {
+            if (controlCategory == "Measure") MeasurementsPane(state, model) {
                 fun display(value: Float) = if (state.fahrenheit) value * 1.8 + 32 else value.toDouble()
                 isothermLower = String.format(Locale.US, "%.1f", display(state.isothermLower)); isothermUpper = String.format(Locale.US, "%.1f", display(state.isothermUpper))
                 isothermMode = if (state.isothermMode == 0) 1 else state.isothermMode; isothermError = ""; isothermDialog = true; model.editing(true)
             }
-            Pane("DISPLAY") {
+            if (controlCategory == "View") Pane("DISPLAY") {
                 Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("Ironbow", "White-hot", "Rainbow").forEachIndexed { index, name -> Action(name, state.palette == index, modifier = Modifier.weight(1f)) { model.palette(index) } }
                 }
@@ -313,7 +308,7 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                     spanError = ""; spanDialog = true; model.editing(true)
                 }
             }
-            Pane("RADIOMETRIC CORRECTION") {
+            if (controlCategory == "Correction") Pane("RADIOMETRIC CORRECTION") {
                 Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Action("Apparent", !state.corrected, enabled = !state.correctionApplying, modifier = Modifier.weight(1f)) { model.correction(state.emissivity, state.reflectedCelsius, false) }
                     Action("Corrected", state.corrected, enabled = !state.correctionApplying, modifier = Modifier.weight(1f)) { model.correction(state.emissivity, state.reflectedCelsius, true) }
@@ -329,7 +324,7 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                 Label("8–14 µm graybody · flat response · short-range transmission assumed 1. Magenta = invalid radiance solution. Reflected temperature is an input, not a sensor reading.", Modifier.padding(12.dp), size = 12)
                 if (state.frame.invalidPixels > 0) Label("${state.frame.invalidPixels} invalid pixels excluded from extrema", Modifier.padding(12.dp), color = Color(0xffb3261e))
             }
-            Pane("CAMERA") {
+            if (controlCategory == "Camera") Pane("CAMERA") {
                 Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Action(if (state.network) "Reconnect" else "Connect", enabled = !state.busy, modifier = Modifier.weight(1f)) {
                         if (state.network) connectNetwork(state.networkUrl) else { model.cameraMode(); permission() }
@@ -344,13 +339,13 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                 }
                 if (state.firmware.isNotEmpty()) Label("Firmware ${state.firmware}", Modifier.padding(12.dp), mono = true)
             }
-            Pane("PERFORMANCE / DIAGNOSTIC") {
+            if (controlCategory == "Info") Pane("PERFORMANCE / DIAGNOSTIC") {
                 if (state.archive) Label("Saved-plane repaint metrics · not live acquisition", Modifier.padding(12.dp), size = 12)
                 val frame = state.frame
                 Label(String.format(Locale.US, "%.2f fps · %d received / %d rendered\n%d source gaps · %d malformed · %d overflow\nCallback → swap %.2f ms\n%s", frame.fps, frame.received, frame.rendered, frame.sourceSequenceGaps, frame.malformed, frame.overflow, frame.swapMs,
                     if (frame.presentationSamples > 0) String.format(Locale.US, "Callback → presentation %.2f ms", frame.presentationMs) else "Presentation timestamp unavailable"), Modifier.padding(12.dp), mono = true)
             }
-            Pane("ABOUT / OPEN SOURCE") {
+            if (controlCategory == "Info") Pane("ABOUT / OPEN SOURCE") {
                 Label("Thermal Field ${BuildConfig.VERSION_NAME} · development preview", Modifier.padding(12.dp))
                 Action("Licenses and notices", modifier = Modifier.padding(12.dp)) { licenseFile = ""; licenseDialog = true; model.editing(true) }
             }
@@ -363,34 +358,41 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
                 }
             } else controls()
         }
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val availableHeight = maxHeight
-            if (maxWidth > maxHeight) {
-                Row(Modifier.fillMaxSize().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Column(Modifier.weight(0.56f)) { live(maxOf(40.dp, availableHeight - 165.dp)) }
-                    Column(Modifier.weight(0.44f)) {
-                        MeasurementToolbar(state, model)
-                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { profileControls() }
+        Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black)) { live() }
+        val captureActions: @Composable RowScope.() -> Unit = {
+            Action(if (state.saving) "Saving…" else "Capture", enabled = model.canCapture(), modifier = Modifier.weight(1f)) { model.capture() }
+            Action("Save raw", enabled = model.canCapture(), modifier = Modifier.weight(1f)) { model.capture(true) }
+            Action(if (state.lastCapture?.rawPreferred == true) "Share raw…" else "Share…", enabled = state.lastCapture != null && !state.saving, modifier = Modifier.weight(1f)) { sharing = true }
+        }
+        Row(Modifier.fillMaxWidth().padding(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Action("Controls", modifier = Modifier.weight(1f)) { controlsDialog = true }
+            Action("Captures", modifier = Modifier.weight(1f)) { model.refreshGallery(); galleryDialog = true; model.editing(true) }
+            Action(if (state.automatic) "Auto span" else "Locked span", state.automatic, enabled = !state.profileApplying, modifier = Modifier.weight(1f)) {
+                if (state.automatic && state.frame.minimum.isFinite() && state.frame.maximum.isFinite())
+                    model.span(false, state.frame.minimum.toFloat(), maxOf(state.frame.minimum.toFloat()+.1f, state.frame.maximum.toFloat()))
+                else model.span(true, state.lower, state.upper)
+            }
+            if (compact) captureActions()
+        }
+        if (controlsDialog) Dialog(onDismissRequest = { controlsDialog = false }) {
+            Pane("CONTROLS") {
+                Column(Modifier.heightIn(max = 600.dp).padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(listOf("View", "Measure", "Correction"), listOf("Camera", "Info")).forEach { categories ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            categories.forEach { category -> Action(category, controlCategory == category, modifier = Modifier.weight(1f)) { controlCategory = category } }
+                        }
                     }
-                }
-            } else {
-                Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MeasurementToolbar(state, model)
-                    live(maxOf(100.dp, availableHeight * 0.35f))
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { profileControls() }
+                    Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (controlCategory == "Measure") MeasurementToolbar(state, model)
+                        profileControls()
+                    }
+                    Action("Done", modifier = Modifier.fillMaxWidth()) { controlsDialog = false }
                 }
             }
         }
-        Column(Modifier.fillMaxWidth().border(1.dp, Rule).background(Gray).padding(8.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Action(if (state.saving) "Saving…" else "Capture", enabled = model.canCapture(), modifier = Modifier.weight(1f)) { model.capture() }
-                Action("Save raw", enabled = model.canCapture(), modifier = Modifier.weight(1f)) { model.capture(true) }
-                Action(if (state.lastCapture?.rawPreferred == true) "Share raw…" else "Share…", enabled = state.lastCapture != null && !state.saving, modifier = Modifier.weight(1f)) { sharing = true }
-            }
-            if (!compact) {
-                if (state.captureMessage.isNotEmpty()) Label(state.captureMessage, Modifier.padding(top = 6.dp), mono = true, size = 12)
-                Label("Volume ↓ view · ↑ / X plane · both save all three files", Modifier.padding(top = 4.dp), mono = true, size = 12)
-            }
+        if (!compact) Column(Modifier.fillMaxWidth().border(1.dp, Rule).background(Gray).padding(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), content = captureActions)
+            if (state.captureMessage.isNotEmpty()) Label(state.captureMessage, Modifier.padding(top = 6.dp), mono = true, size = 12)
         }
         val status = when {
             state.frame.error.isNotEmpty() -> state.frame.error
@@ -401,7 +403,7 @@ internal fun temperature(value: Double, fahrenheit: Boolean): String {
             else -> state.status
         }
         Label(if (compact && state.captureMessage.isNotEmpty()) "$status · ${state.captureMessage}" else status,
-            Modifier.fillMaxWidth().border(1.dp, Rule).background(Light).padding(horizontal = 12.dp, vertical = if (compact) 6.dp else 12.dp), mono = true, size = if (compact) 12 else 14)
+            Modifier.fillMaxWidth().border(1.dp, Rule).background(Light).padding(horizontal = 12.dp, vertical = 4.dp), mono = true, size = 12)
     }
     if (galleryDialog) Dialog(onDismissRequest = { galleryDialog = false; model.editing(false) }) {
         Pane("SAVED CAPTURES") {

@@ -198,6 +198,18 @@ class ValidationInstrumentation : Instrumentation() {
                 }
             }
             awaitReady()
+            runOnMainSync {
+                @Suppress("UNCHECKED_CAST")
+                val flow = CameraViewModel::class.java.getDeclaredField("mutableState").apply { isAccessible = true }
+                    .get(active) as kotlinx.coroutines.flow.MutableStateFlow<CameraUiState>
+                val ready = flow.value
+                try {
+                    flow.value = ready.copy(frame = ready.frame.copy(sourceGeneration = ready.expectedSourceGeneration-1))
+                    check(!active.canCapture() && active.captureRefusalReason().contains("this source")) {
+                        "Old-source telemetry was accepted as capture-ready"
+                    }
+                } finally { flow.value = ready }
+            }
             runOnMainSync { active.deleteMeasurement(0); active.measurementOptions(0, 0, 0) }
             awaitReady { it.frame.measurements.isEmpty() }
             configure(2, 2, false, true, .96, 20.0, true, 20f, 30f)
@@ -536,6 +548,35 @@ class ValidationInstrumentation : Instrumentation() {
                 check(context.getJSONArray("configured_properties").getInt(i) == configured[i])
             }
             check(!context.has("serial") && !context.has("source_address"))
+            // Native capture pixels, marker coordinates and metadata must agree
+            // after every quarter-turn; the radiometric words stay unrotated.
+            val baseRgba = 4 + length + 196608
+            val sensorX = 56
+            val sensorY = 40
+            val basePixel = baseRgba + ((191-sensorY)*256+sensorX)*4
+            for (turn in 0..3) {
+                bridge.configure(engine, 0, false, turn, false, true, 20f, 30f)
+                val deadline = SystemClock.elapsedRealtime()+5000
+                while (JSONObject(bridge.summary(engine)).getInt("rotation_degrees") != turn*90 && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(20)
+                val rotated = bridge.capture(engine)
+                val rotatedLength = ByteBuffer.wrap(rotated, 0, 4).order(ByteOrder.BIG_ENDIAN).int
+                val m = JSONObject(String(rotated, 4, rotatedLength, Charsets.UTF_8))
+                val width = if (turn%2 == 0) 256 else 192
+                val height = if (turn%2 == 0) 192 else 256
+                check(m.getInt("rotation_degrees") == turn*90 && m.getInt("rendered_width") == width && m.getInt("rendered_height") == height)
+                check(rotated.copyOfRange(4+rotatedLength+98304,4+rotatedLength+196608).contentEquals(frame.copyOfRange(98304,196608)))
+                val point = when (turn) {
+                    0 -> sensorX to sensorY
+                    1 -> 191-sensorY to sensorX
+                    2 -> 255-sensorX to 191-sensorY
+                    else -> sensorY to 255-sensorX
+                }
+                val pixel = 4+rotatedLength+196608+((height-1-point.second)*width+point.first)*4
+                for (channel in 0..3) check(kotlin.math.abs((rotated[pixel+channel].toInt() and 255)-(packet[basePixel+channel].toInt() and 255)) <= 1) {
+                    "Capture pixel orientation disagrees with metadata at quarter-turn $turn"
+                }
+            }
+            bridge.configure(engine, 0, false, 0, false, true, 20f, 30f)
             val saved = CaptureStore.save(targetContext, packet, false, false).also { temporary += it }
             check(CaptureCatalog.list(targetContext).any { it.capture.id == saved.id })
             val loaded = CaptureCatalog.load(targetContext, saved)

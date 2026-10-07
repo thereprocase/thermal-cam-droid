@@ -9,11 +9,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.viewinterop.AndroidView
 import java.util.Locale
 
-@Composable internal fun ThermalViewport(state: CameraUiState, model: CameraViewModel, ratio: Float, modifier: Modifier, surfaceCreated: () -> Unit) {
-    Box(modifier) {
+@Composable internal fun ThermalViewport(state: CameraUiState, model: CameraViewModel, ratio: Float, modifier: Modifier, surfaceCreated: () -> Unit, compactScale: Boolean = false) {
+    BoxWithConstraints(modifier) {
         AndroidView(factory = { context -> SurfaceView(context).apply {
             holder.addCallback(object : SurfaceHolder.Callback {
                 override fun surfaceCreated(holder: SurfaceHolder) { model.surface(holder.surface); surfaceCreated() }
@@ -22,6 +24,47 @@ import java.util.Locale
             })
         } }, modifier = Modifier.matchParentSize())
         if (state.frame.frame > 0 && (state.connected || state.fixture || state.archive)) MeasurementOverlay(state, model, ratio, Modifier.matchParentSize())
+        if (state.measurementTool != 0) {
+            val tool = when (state.measurementTool) { 1 -> "Spot"; 2 -> "Box"; else -> "Line" }
+            Action("$tool · Done", modifier = Modifier.align(Alignment.TopStart).padding(6.dp)) { model.measurementTool(0) }
+        }
+        if (compactScale) {
+            val imageWidth = minOf(maxWidth, maxHeight*ratio)
+            val imageHeight = imageWidth/ratio
+            val horizontalBar = (maxHeight-imageHeight)/2
+            val verticalBar = (maxWidth-imageWidth)/2
+            val valid = state.frame.frame > 0 && (state.connected || state.fixture || state.archive) && state.frame.error.isEmpty()
+            val lower = if (state.automatic) state.frame.minimum else state.lower.toDouble()
+            val upper = if (state.automatic) state.frame.maximum else state.upper.toDouble()
+            Column(Modifier.offset(x = verticalBar, y = horizontalBar+maxOf(0.dp, imageHeight-(if (state.automatic) 48.dp else 68.dp))).width(imageWidth).background(Light.copy(alpha = .90f)).padding(horizontal = 6.dp, vertical = 2.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Label("MIN ${if (valid) temperature(state.frame.minimum, state.fahrenheit) else "—"}", mono = true, size = 11)
+                    Label("C ${if (valid) temperature(state.frame.center, state.fahrenheit) else "—"}", mono = true, size = 11)
+                    Label("MAX ${if (valid) temperature(state.frame.maximum, state.fahrenheit) else "—"}", mono = true, size = 11)
+                }
+                PaletteScale(state.palette)
+                if (!state.automatic) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Label(if (valid || !state.automatic) temperature(lower, state.fahrenheit) else "—", mono = true, size = 11)
+                    Label(if (state.automatic) "AUTO SCALE" else "LOCKED SCALE", mono = true, size = 11)
+                    Label(if (valid || !state.automatic) temperature(upper, state.fahrenheit) else "—", mono = true, size = 11)
+                }
+                val qualification = if (state.fixture || state.archive && state.archiveSynthetic) "SYNTHETIC · not a measurement" else "${if (state.archive) "SAVED" else if (state.network) "NETWORK" else "USB"} · ${if (state.corrected) "Corrected ε ${String.format(Locale.US, "%.2f", state.emissivity)}" else "Apparent"} · validation pending"
+                Label("${if (state.automatic) "AUTO · " else ""}$qualification", size = 10)
+            }
+            // Controls occupy existing letterbox space only; their minimum
+            // targets must fit without changing sensor-coordinate mapping.
+            if (horizontalBar >= 56.dp) {
+                Row(Modifier.align(Alignment.BottomCenter).height(horizontalBar).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Action("Rotate +90°", enabled = !state.profileApplying) { model.rotate() }
+                    Action("Mirror", state.mirror, enabled = !state.profileApplying) { model.mirror() }
+                }
+            } else if (verticalBar >= 64.dp) {
+                Column(Modifier.align(Alignment.CenterStart).width(minOf(verticalBar, 140.dp)).padding(4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Action("+90°", enabled = !state.profileApplying, modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Rotate camera image clockwise 90 degrees" }) { model.rotate() }
+                    Action("180°", state.flip, enabled = !state.profileApplying, modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Flip camera image 180 degrees" }) { model.flip() }
+                }
+            }
+        }
         if ((!state.connected && !state.fixture && !state.archive) || state.frame.frame == 0L || state.frame.error.isNotEmpty()) {
             Box(Modifier.matchParentSize().background(Light), contentAlignment = Alignment.Center) {
                 Label(if (state.busy) "CONNECTING" else "NO SIGNAL", mono = true, size = 18)
@@ -44,29 +87,24 @@ import java.util.Locale
 }
 
 @Composable internal fun FullScreenView(state: CameraUiState, model: CameraViewModel, surfaceCreated: () -> Unit) {
-    val ratio = if ((state.rotation + if (state.flip) 2 else 0) % 2 == 0) 4f / 3f else 3f / 4f
+    val ratio = if (state.renderRotation % 2 == 0) 4f / 3f else 3f / 4f
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         ThermalViewport(state, model, ratio, Modifier.fillMaxSize(), surfaceCreated)
         Row(Modifier.align(Alignment.TopEnd).safeDrawingPadding().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Action("Exit full screen") { model.fullScreen(false) }
             Action(if (state.saving) "Saving…" else "Capture", enabled = model.canCapture()) { model.capture() }
         }
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().safeDrawingPadding().background(Light).padding(8.dp)) {
-            val valid = state.frame.frame > 0 && (state.connected || state.fixture || state.archive) && state.frame.error.isEmpty()
-            val lower = if (state.automatic) state.frame.minimum else state.lower.toDouble()
-            val upper = if (state.automatic) state.frame.maximum else state.upper.toDouble()
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Label("MIN ${if (valid) temperature(state.frame.minimum, state.fahrenheit) else "—"}", mono = true, size = 12)
-                Label("C ${if (valid) temperature(state.frame.center, state.fahrenheit) else "—"}", mono = true, size = 12)
-                Label("MAX ${if (valid) temperature(state.frame.maximum, state.fahrenheit) else "—"}", mono = true, size = 12)
+        Column(Modifier.align(Alignment.BottomCenter).safeDrawingPadding().background(Light.copy(alpha = .9f)).padding(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Action("+90°", enabled = !state.profileApplying, modifier = Modifier.semantics { contentDescription = "Rotate camera image clockwise 90 degrees" }) { model.rotate() }
+                Action("Flip", state.flip, enabled = !state.profileApplying, modifier = Modifier.semantics { contentDescription = "Flip camera image 180 degrees" }) { model.flip() }
+                Action("Lock", state.rotationLocked) { model.rotationLock() }
             }
-            PaletteScale(state.palette)
-            Label("${if (state.automatic) "AUTO" else "LOCKED"} ${if (valid || !state.automatic) temperature(lower, state.fahrenheit) else "—"} — ${if (valid || !state.automatic) temperature(upper, state.fahrenheit) else "—"}", mono = true, size = 12)
-            val source = if (state.archive) "SAVED FRAME${if (state.archiveSynthetic) " · SYNTHETIC" else ""}" else if (state.fixture) "DEMO · SYNTHETIC" else if (state.network) "NETWORK" else "USB"
-            val modelLabel = if (state.corrected) "Corrected ε ${String.format(Locale.US,"%.3f",state.emissivity)} · R ${temperature(state.reflectedCelsius,state.fahrenheit)}" else "Apparent"
-            Label("$source · $modelLabel${if (state.fixture || state.archiveSynthetic && state.archive) " · not a measurement" else " · validation pending"}", size = 12)
-            if (state.captureMessage.isNotEmpty()) Label(state.captureMessage, mono = true, size = 12)
-            if (!valid) Label(state.frame.error.ifEmpty { state.status }, mono = true, size = 12)
+            val source = if (state.archive) "SAVED" else if (state.fixture) "DEMO · SYNTHETIC" else if (state.network) "NETWORK" else "USB"
+            Label("$source · ${if (state.corrected) "Corrected" else "Apparent"} · ${temperature(state.frame.center, state.fahrenheit)} · ${if (state.measurementTool == 0) "View" else "Measurement tool active"}", size = 12)
+            Label(if (state.fixture || state.archive && state.archiveSynthetic) "Synthetic data · not a measurement" else "Accuracy validation pending", size = 10)
+            if (state.captureMessage.isNotEmpty()) Label(state.captureMessage, size = 12)
+            if (state.frame.error.isNotEmpty()) Label(state.frame.error, size = 12)
         }
     }
 }

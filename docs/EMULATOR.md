@@ -42,3 +42,13 @@ adb -s emulator-5556 shell am instrument -w -e layout_restart verify com.therepr
 ```
 
 Confirm the seed phase reports success before stopping the process. The verifier checks a different process ID and exact native layout restoration, then restores the original layout preference and removes its cache evidence. Complete the verify phase after a successful seed; the seed intentionally leaves the synthetic layout installed between phases. These optional phases reject a physical-device app package. The regular integration runner independently checks full-capacity layout restoration, clearing, invalid data and archive preference isolation.
+
+## Four-way sensor orientation
+
+After installing the isolated emulator build, run:
+
+```sh
+python3 tools/check_emulator_orientation.py --adb "$ANDROID_SDK_ROOT/platform-tools/adb" --serial emulator-5556
+```
+
+This injects four accelerometer directions through the emulator console, checks that full screen requests `fullSensor`, observes all four display rotations, and checks screen-lock/unlock behavior. It restores upright acceleration and exits full screen afterward. Run it separately from the UI checker and integration runner; these checks share the emulator activity. It does not establish the physical camera mounting offset on a phone.

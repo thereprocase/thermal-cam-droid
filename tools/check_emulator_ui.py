@@ -29,7 +29,8 @@ def main():
         return list(ET.fromstring(adb("shell", "cat", "/data/local/tmp/thermal-ui.xml")).iter("node"))
 
     def find(label, snapshot):
-        return next((n for n in snapshot if label in (n.get("text"), n.get("content-desc"))), None)
+        return next((n for n in snapshot if label in (n.get("text"), n.get("content-desc")) or
+                     label == "SYNTHETIC · not a measurement" and n.get("text", "").endswith(label)), None)
 
     def require(label):
         for _ in range(3):
@@ -72,7 +73,7 @@ def main():
     adb("shell", "am", "start", "-n", f"{PACKAGE}/com.thereprocase.thermalfield.MainActivity",
         "--ez", "fixture", "true")
     time.sleep(3)
-    require("DEMO / SYNTHETIC TEMPERATURES")
+    require("SYNTHETIC · not a measurement")
     tap("Full screen")
     if find("Viewing full screen", nodes()) is not None:
         tap("Got it")
@@ -82,6 +83,8 @@ def main():
     tap("Full screen")
     tap("Exit full screen")
     require("Full screen")
+    tap("Controls")
+    tap("View")
     scroll_to("Rotate +90°")
     orientation = next((n.get("text") for n in nodes()
                         if re.fullmatch(r"(?:0|90|180|270)°(?: · mirrored)?", n.get("text", ""))), None)
@@ -105,6 +108,7 @@ def main():
     for _ in range(3):
         tap("Rotate +90°")
     require(orientation)
+    tap("Correction")
     scroll_to("Set emissivity / reflected T")
     tap("Set emissivity / reflected T")
     snapshot = require("EMISSIVITY / REFLECTED TEMPERATURE")
@@ -119,8 +123,11 @@ def main():
         raise AssertionError("Sign button did not change the reflected-temperature field")
     tap("Change temperature sign")
     tap("Apply inputs")
+    tap("Done")
     tap("Full screen")
     tap("Exit full screen")
+    tap("Controls")
+    tap("Measure")
     scroll_to("Isotherm…")
     tap("Isotherm…")
     tap("Band")
@@ -143,9 +150,10 @@ def main():
         raise AssertionError("Viewer isotherm summary omitted the active threshold")
     tap("Isotherm…")
     tap("Disable isotherm")
+    tap("Done")
     adb("shell", "input", "keyevent", "KEYCODE_HOME")
     adb("shell", "am", "start", "-n", f"{PACKAGE}/com.thereprocase.thermalfield.MainActivity")
-    require("DEMO / SYNTHETIC TEMPERATURES")
+    require("SYNTHETIC · not a measurement")
     print(json.dumps({"source": "synthetic", "full_screen_button_and_back": "passed",
                       "rotation_mirror_flip": "passed", "reflected_sign_button": "passed",
                       "mode_specific_isotherm_fields_and_summary": "passed",
